@@ -1,0 +1,39 @@
+version: 2
+
+input:
+  adapter: muse
+  path: /path/to/muse_cube.fits
+  redshift: 0.01
+  x_range: [100, 103]
+  y_range: [100, 103]
+
+fit:
+  frame: rest
+  wavelength_medium: air
+  window: [6480.0, 6655.0]
+  continuum:
+    degree: 1
+    windows: [[6480.0, 6515.0], [6625.0, 6655.0]]
+  kinematics:
+    max_components: 3
+    velocity_kms: [-800.0, 800.0]
+    sigma_kms: [30.0, 800.0]
+  lines:
+    - {name: halpha, wavelength: 6562.80}
+    - {name: nii6583, wavelength: 6583.45}
+    - {name: nii6548, wavelength: 6548.05, ratio_to: nii6583, ratio: 0.335}
+  lsf:
+    model: polynomial_fwhm_angstrom
+    reference_angstrom: 7000.0
+    scale_angstrom: 1000.0
+    coefficients: [2.48344, -0.09746, 0.05866]
+  selection:
+    delta_logz: 5.0
+    audit: {mode: flag}
+  sampling: {min_num_live_points: 200, min_ess: 400, dlogz: 0.5}
+
+output:
+  directory: ./muse_halpha_output
+  resume: true
+  plots: selected
+  workers: 2

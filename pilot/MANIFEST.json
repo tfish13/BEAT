@@ -1,0 +1,22 @@
+{
+  "artifact": "BEAT astronomer pilot kit",
+  "version": "2.0.0a1",
+  "created": "2026-07-17",
+  "python_requires": ">=3.9",
+  "wheel": "wheel/beat_astro-2.0.0a1-py3-none-any.whl",
+  "wheel_sha256": "57b7fb717547bb5c36b8bbf994045460c65d34c6c5161b53889c6e8c8d88805c",
+  "automated_tests": {
+    "passed": 44,
+    "failed": 0
+  },
+  "packaged_wheel_demo": {
+    "status": "passed",
+    "selected_components": 1,
+    "selection_status": "accepted"
+  },
+  "scientific_status": {
+    "nirspec_standard_core": "16/16 component counts correct",
+    "nirspec_powered_blank_single_scope": "40/40 component counts correct",
+    "full_release_acceptance": false
+  }
+}

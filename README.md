@@ -46,7 +46,10 @@ For every target or spaxel, BEAT tries models containing 0 through
 Centroids and widths are transformed to observed Angstrom independently for
 each line using the spectrum's redshift. A polynomial continuum of degree 0,
 1, or 2 is fit simultaneously and is present in every compared model. The
-likelihood currently assumes independent Gaussian pixel uncertainties.
+The default likelihood assumes independent Gaussian pixel uncertainties.
+For correlated products, an opt-in AR(1) residual-noise model and an
+inflation-only empirical marginal-error calibration are available through the
+configuration schema.
 
 The next component is selected when its evidence exceeds the best simpler
 model by `selection.delta_logz`. Evidence depends on the prior volume, so the

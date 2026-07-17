@@ -1,0 +1,41 @@
+version: 2
+
+input:
+  kind: survey_table
+  path: /path/to/survey_spectra.fits
+  hdu: SPECTRA
+  id_column: TARGETID
+  redshift_column: Z
+  wavelength_column: WAVE
+  flux_column: FLUX
+  uncertainty_column: IVAR
+  uncertainty_kind: inverse_variance
+  wavelength_unit: angstrom
+  row_start: 0
+  row_stop: 100
+
+fit:
+  frame: rest
+  window: [6500.0, 6620.0]
+  continuum:
+    degree: 1
+    windows: [[6500.0, 6525.0], [6600.0, 6620.0]]
+  kinematics:
+    max_components: 3
+    velocity_kms: [-700.0, 700.0]
+    sigma_kms: [25.0, 700.0]
+  lines:
+    - {name: halpha, wavelength: 6562.80}
+    - {name: nii6583, wavelength: 6583.45}
+    - {name: nii6548, wavelength: 6548.05, ratio_to: nii6583, ratio: 0.335}
+  selection:
+    delta_logz: 5.0
+    audit: {mode: flag}
+  sampling: {min_num_live_points: 400, min_ess: 600, dlogz: 0.3}
+
+output:
+  directory: ./survey_output
+  resume: true
+  plots: none
+  workers: 4
+  progress_every: 100

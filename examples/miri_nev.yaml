@@ -1,0 +1,35 @@
+version: 2
+
+input:
+  adapter: miri
+  glob: /path/to/jwst_miri_ch*.fits
+  redshift: 0.01
+  x_range: [20, 23]
+  y_range: [20, 23]
+  # segment: 3B
+
+fit:
+  frame: rest
+  wavelength_medium: vacuum
+  window: [141000.0, 145000.0]
+  continuum:
+    degree: 1
+    windows: [[141000.0, 141800.0], [144200.0, 145000.0]]
+  noise: {model: ar1, rho: auto, marginal_scale: auto}
+  kinematics:
+    max_components: 3
+    velocity_kms: [-1000.0, 1000.0]
+    sigma_kms: [30.0, 1000.0]
+  lines:
+    - {name: nev1432, wavelength: 143217.0}
+  lsf: {model: instrument}
+  selection:
+    delta_logz: 5.0
+    audit: {mode: flag}
+  sampling: {min_num_live_points: 200, min_ess: 400, dlogz: 0.5}
+
+output:
+  directory: ./miri_nev_output
+  resume: true
+  plots: selected
+  workers: 2

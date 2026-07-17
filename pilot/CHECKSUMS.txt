@@ -1,0 +1,1 @@
+57b7fb717547bb5c36b8bbf994045460c65d34c6c5161b53889c6e8c8d88805c  wheel/beat_astro-2.0.0a1-py3-none-any.whl

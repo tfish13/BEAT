@@ -1,0 +1,36 @@
+version: 2
+
+input:
+  kind: spectrum_files
+  glob: /path/to/spectra/*.txt
+  format: ascii
+  wavelength_column: 0
+  flux_column: 1
+  uncertainty_column: 2
+  uncertainty_kind: sigma
+  wavelength_unit: angstrom
+  redshift: 0.035
+
+fit:
+  frame: rest
+  window: [4800.0, 5100.0]
+  continuum:
+    degree: 1
+    windows: [[4800.0, 4830.0], [5070.0, 5100.0]]
+  kinematics:
+    max_components: 3
+    velocity_kms: [-600.0, 600.0]
+    sigma_kms: [30.0, 600.0]
+  lines:
+    - {name: hbeta, wavelength: 4861.33}
+    - {name: oiii5007, wavelength: 5006.84}
+    - {name: oiii4959, wavelength: 4958.92, ratio_to: oiii5007, ratio: 0.33557}
+  selection:
+    delta_logz: 5.0
+    audit: {mode: flag}
+  sampling: {min_num_live_points: 200, min_ess: 400, dlogz: 0.5}
+
+output:
+  directory: ./ascii_spectra_output
+  resume: true
+  plots: selected

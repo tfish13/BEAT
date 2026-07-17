@@ -1,0 +1,43 @@
+version: 2
+
+input:
+  kind: spectrum_files
+  files: [demo_spectrum.txt]
+  format: ascii
+  wavelength_column: 0
+  flux_column: 1
+  uncertainty_column: 2
+  uncertainty_kind: sigma
+  wavelength_unit: angstrom
+  redshift: 0.01
+
+fit:
+  frame: rest
+  window: [4900.0, 5070.0]
+  minimum_valid_pixels: 100
+  continuum:
+    degree: 1
+    windows: [[4900.0, 4925.0], [5040.0, 5070.0]]
+  noise: {model: independent}
+  kinematics:
+    max_components: 2
+    velocity_kms: [-500.0, 500.0]
+    sigma_kms: [30.0, 500.0]
+  lines:
+    - {name: oiii5007, wavelength: 5006.84}
+    - {name: oiii4959, wavelength: 4958.92, ratio_to: oiii5007, ratio: 0.33557}
+  lsf: {model: resolving_power, value: 3000.0}
+  selection:
+    delta_logz: 5.0
+    audit: {mode: flag}
+  sampling:
+    min_num_live_points: 80
+    min_ess: 100
+    dlogz: 1.0
+    show_status: false
+
+output:
+  directory: ./beat_demo_output
+  resume: true
+  plots: selected
+  workers: 1
