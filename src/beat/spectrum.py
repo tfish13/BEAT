@@ -52,6 +52,10 @@ class Spectrum:
         flux = flux[valid]
         if uncertainty is not None:
             uncertainty = uncertainty[valid]
+        if wavelength.size < 2:
+            raise ValueError(
+                f"{self.spectrum_id}: fewer than two valid wavelength/flux pixels"
+            )
 
         order = np.argsort(wavelength)
         wavelength = wavelength[order]

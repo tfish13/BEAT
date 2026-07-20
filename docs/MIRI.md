@@ -44,10 +44,27 @@ the pipeline version, CRDS context, and cube, distortion, fringe, and photom
 reference provenance. A release-quality analysis may override it with a more
 appropriate wavelength-dependent calibration table.
 
+### Validated alpha domain
+
+The bounded `miri-bounded-v1` gate passes product routing in all 12 MRS
+sub-bands for both supplied targets and controlled recovery tests in 2A, 3B,
+and 4C. Those bands span 1.76, 2.10, and 3.67 pixels per
+Gaussian-equivalent LSF FWHM. The tested Gaussian approximation recovers all
+24 reference component counts and both declared shifted-wing stress cases,
+with no evidence flags.
+
+This supports isolated narrow singles at effective peak S/N=15, resolved
+singles at S/N=10, and resolved doubles separated by at least three
+instrumental FWHM with the weaker component at S/N>=10. Intrinsic-width
+recovery is validated only when intrinsic sigma is at least 0.75 times the
+instrumental sigma. Weaker or closer components, intrinsically narrow widths
+in undersampled regions, other sub-bands, and more asymmetric profiles require
+review or a tabulated/empirical LSF. See
+[`validation/MIRI_BOUNDED_VALIDATION.md`](../validation/MIRI_BOUNDED_VALIDATION.md).
+
 ## Examples
 
 The IC 5063 and NGC 4151 examples request a 5-by-5 region around a provisional
 [Ne V] 14.32 micron window. Both should automatically select segment 3B. The
 rest wavelength and continuum windows remain pilot choices to confirm before
 scientific fitting.
-

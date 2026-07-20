@@ -55,6 +55,15 @@ def safe_stem(identifier: str) -> str:
     return f"{readable}-{digest}"
 
 
+def spectrum_seed(identifier: str, fit: dict[str, Any]) -> int | None:
+    """Derive a stable 32-bit sampler seed when a base seed is configured."""
+    configured = fit.get("sampling", {}).get("seed")
+    if configured is None:
+        return None
+    payload = f"{int(configured)}:{identifier}".encode("utf-8")
+    return int.from_bytes(hashlib.sha256(payload).digest()[:4], "big")
+
+
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
     temporary = path.with_suffix(path.suffix + f".tmp-{os.getpid()}")
     temporary.write_text(
@@ -85,8 +94,12 @@ def _worker(
     plots: str,
     plots_dir: str,
 ) -> dict[str, Any]:
+    seed = spectrum_seed(spectrum.spectrum_id, fit)
+    if seed is not None:
+        np.random.seed(seed)
     try:
         result = fit_spectrum(spectrum, fit)
+        result["sampler_seed"] = seed
         if plots == "selected":
             plot_path = Path(plots_dir) / f"{safe_stem(spectrum.spectrum_id)}.png"
             make_diagnostic_plot(spectrum, fit, result, plot_path)
@@ -114,6 +127,7 @@ def _worker(
             "error_type": type(exc).__name__,
             "error": str(exc),
             "traceback": traceback.format_exc(),
+            "sampler_seed": seed,
         }
 
 
@@ -329,6 +343,28 @@ def _iter_unique_spectra(config: dict[str, Any]) -> Iterator[Spectrum]:
         yield spectrum
 
 
+def _process_executor(workers: int) -> ProcessPoolExecutor:
+    """Create a process pool when macOS hides its semaphore-limit sysconf."""
+    try:
+        return ProcessPoolExecutor(max_workers=workers)
+    except PermissionError:
+        original_sysconf = os.sysconf
+
+        def readable_sysconf(name: str | int) -> int:
+            try:
+                return original_sysconf(name)
+            except PermissionError:
+                if name == "SC_SEM_NSEMS_MAX":
+                    return -1  # Python interprets -1 as an indeterminate limit.
+                raise
+
+        os.sysconf = readable_sysconf
+        try:
+            return ProcessPoolExecutor(max_workers=workers)
+        finally:
+            os.sysconf = original_sysconf
+
+
 def run_pipeline(config: dict[str, Any], workers: int | None = None) -> dict[str, Any]:
     """Fit the configured dataset, writing atomic per-spectrum checkpoints."""
     output_config = config["output"]
@@ -342,6 +378,10 @@ def run_pipeline(config: dict[str, Any], workers: int | None = None) -> dict[str
 
     fingerprint = config_fingerprint(config)
     started = datetime.now(timezone.utc).isoformat()
+    if workers is None:
+        workers = int(output_config.get("workers", max(1, (os.cpu_count() or 2) - 1)))
+    if workers < 1:
+        raise ValueError("workers must be at least one")
     manifest = {
         "beat_version": __version__,
         "config_hash": fingerprint,
@@ -349,13 +389,14 @@ def run_pipeline(config: dict[str, Any], workers: int | None = None) -> dict[str
         "python": platform.python_version(),
         "platform": platform.platform(),
         "config": public_config(config),
+        "execution": {
+            "workers": workers,
+            "resume": bool(output_config.get("resume", True)),
+            "plots": output_config.get("plots", "selected"),
+        },
     }
     _atomic_json(output_dir / "run_manifest.json", manifest)
 
-    if workers is None:
-        workers = int(output_config.get("workers", max(1, (os.cpu_count() or 2) - 1)))
-    if workers < 1:
-        raise ValueError("workers must be at least one")
     resume = bool(output_config.get("resume", True))
     plots = output_config.get("plots", "selected")
     progress_every = max(1, int(output_config.get("progress_every", 10)))
@@ -407,7 +448,7 @@ def run_pipeline(config: dict[str, Any], workers: int | None = None) -> dict[str
             exhausted = True
             return False
 
-        with ProcessPoolExecutor(max_workers=workers) as executor:
+        with _process_executor(workers) as executor:
             for _ in range(2 * workers):
                 if not submit_one(executor):
                     break

@@ -54,3 +54,19 @@ WFM Gaussian approximation
 This empirical relation supports initial WFM validation but is not a
 substitute for a configuration-matched `LSF_PROFILE`. Its identity and
 approximation status should remain part of run provenance.
+
+## Validated narrow-line domain
+
+The frozen alpha validation uses the representative polynomial above together
+with empirically scaled marginal uncertainties and the opt-in AR(1) likelihood.
+For H-alpha+[N II], the tested supported domain includes S/N=10--15 singles,
+300--500 km/s doubles in the documented width/ratio families, and triples with
+400--500 km/s adjacent spacing and weakest-component S/N>=10. A 300 km/s,
+0.5-ratio double with sigma=(160,80) km/s is explicitly outside the supported
+domain because it underfits in both NGC 3393 residual realizations.
+
+The frozen gate has 0/60 blank false positives and 20/20 correct counts in
+each supported nonblank class. The separate H-beta+[O III] wavelength check is
+16/16 in component count but remains diagnostic because one correct triple is
+convergence-unverified. Full parameter coverage and caveats are in
+[`validation/MUSE_POWERED_VALIDATION.md`](../validation/MUSE_POWERED_VALIDATION.md).

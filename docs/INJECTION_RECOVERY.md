@@ -95,12 +95,12 @@ therefore a profile-asymmetry diagnostic rather than an accepted physical
 decomposition. See `validation/ALPHA_TEST_REPORT.md` for exact values and
 next steps.
 
-The later `three-component-v1` H-alpha pilot allows zero through three narrow
+The historical `three-component-v1` H-alpha pilot allows zero through three narrow
 components in every fit. It recovers 7/8 counts: both blanks, both singles,
 both doubles, and one of two triples. The missed NGC 2992 triple remains an
 underfit under tighter sampling, while an apparent false third component in an
 NGC 3393 double disappears under tighter sampling. The triple-recovery and
-median velocity-error gates therefore remain open. See
+median velocity-error gates failed in that undersized pilot. See
 `validation/HALPHA_THREE_COMPONENT_PILOT.md` and the machine-readable results
 under `validation/halpha_acceptance_grid_3component/`.
 
@@ -111,6 +111,16 @@ stable under tight evidence, while 400 km/s recovers equal, moderate, and
 1:0.5:0.25 patterns in the tested seeds. These are conditional calibration
 points, not a universal spectral-resolution rule. See
 `validation/HALPHA_CONTROLLED_TRIPLE_CALIBRATION.md`.
+
+The frozen powered follow-up supersedes those provisional H-alpha gates. Its
+supported red domain contains 60 blanks and 20 singles, doubles, and triples;
+all 120 counts are correct, no evidence flags remain, and the median absolute
+velocity, width, and flux errors are 4.91 km/s, 5.29%, and 4.41%. The exact
+one-sided 95% upper false-positive bound is 4.87%. The complete boundary matrix
+also retains a donor-dependent 300 km/s broad-primary/0.5-ratio double outside
+the supported domain. A 16-case H-beta+[O III] check exercises the LSF near
+5000 A. See `validation/MUSE_POWERED_VALIDATION.md` and the frozen hashes under
+`validation/muse_powered_validation/`.
 
 ## NIRSpec G235H/G395H pilot
 
@@ -134,5 +144,7 @@ on correlated cube residuals. After empirical marginal-error calibration and
 an AR(1) likelihood estimated from line-free continuum pixels, the final
 40-case matrix recovers 20/20 blanks and 20/20 S/N=10 singles, with no evidence
 flags. Median errors are 5.28 km/s, 10.04% in intrinsic width, and 6.46% in
-integrated flux. This powers only the blank/single scope; double/triple
-completeness still requires expansion.
+integrated flux. The subsequent powered double/triple expansion passes its
+predeclared count gates after audit. G235H weak-component reliability is
+supported at effective component S/N>=10; lower-S/N cases remain exploratory.
+See `validation/NIRSPEC_INJECTION_RECOVERY.md`.
