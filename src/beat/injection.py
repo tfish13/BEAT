@@ -92,6 +92,35 @@ def muse_oiii_fit(
     }
 
 
+def muse_hbeta_oiii_fit(
+    max_components: int = 2,
+    min_num_live_points: int = 80,
+    min_ess: int = 120,
+    dlogz: float = 1.0,
+) -> dict[str, Any]:
+    """Return the MUSE H-beta+[O III] validation model."""
+    fit = muse_oiii_fit(
+        max_components=max_components,
+        min_num_live_points=min_num_live_points,
+        min_ess=min_ess,
+        dlogz=dlogz,
+    )
+    fit["window"] = [4800.0, 5100.0]
+    fit["minimum_valid_pixels"] = 100
+    fit["continuum"]["windows"] = [[4800.0, 4830.0], [5070.0, 5100.0]]
+    fit["lines"] = [
+        {"name": "hbeta", "wavelength": 4861.33},
+        {"name": "oiii5007", "wavelength": 5006.84},
+        {
+            "name": "oiii4959",
+            "wavelength": 4958.92,
+            "ratio_to": "oiii5007",
+            "ratio": 0.33557,
+        },
+    ]
+    return fit
+
+
 def muse_halpha_nii_fit(
     max_components: int = 2,
     include_broad_halpha: bool = False,

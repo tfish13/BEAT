@@ -43,6 +43,11 @@ ACCEPTANCE_THRESHOLDS = {
     "minimum_cases_per_count_class": 20,
 }
 
+ACCEPTED_SELECTION_STATUSES = {"accepted", "accepted_after_audit"}
+MODERATE_MAX_REASON = (
+    "maximum component count is selected without decisive evidence"
+)
+
 DATASETS = {
     "ngc4151_sivi": {
         "config": "nirspec_ngc4151.local.yaml",
@@ -94,13 +99,32 @@ def write_json(path: Path, payload: Any) -> None:
 
 
 def validation_fit(
-    specification: dict[str, Any], profile: str, correlated_noise: bool = False
+    specification: dict[str, Any],
+    profile: str,
+    correlated_noise: bool = False,
+    automatic_rerun: bool = False,
 ) -> dict[str, Any]:
     if profile in {"pilot", "expanded"}:
         sampling = {"min_num_live_points": 40, "min_ess": 40, "dlogz": 5.0}
     else:
         sampling = {"min_num_live_points": 100, "min_ess": 200, "dlogz": 0.5}
     nsteps = 10 if profile in {"pilot", "expanded"} else 20
+    if profile == "standard":
+        audit_sampling = {
+            "min_num_live_points": 100,
+            "min_ess": 200,
+            "dlogz": 0.5,
+            "stepsampler": "slice",
+            "nsteps": 20,
+        }
+    else:
+        audit_sampling = {
+            "min_num_live_points": 100,
+            "min_ess": 200,
+            "dlogz": 0.5,
+            "stepsampler": "slice",
+            "nsteps": 20,
+        }
     return {
         "frame": "rest",
         "wavelength_medium": "vacuum",
@@ -127,7 +151,10 @@ def validation_fit(
         "selection": {
             "delta_logz": 5.0,
             "stop_when_not_preferred": True,
-            "audit": {"mode": "flag"},
+            "audit": {
+                "mode": "rerun" if automatic_rerun else "flag",
+                "sampling": audit_sampling,
+            },
         },
         "sampling": {
             **sampling,
@@ -201,6 +228,151 @@ def case_definitions(
     label: str, profile: str, matrix: str = "core"
 ) -> list[dict[str, Any]]:
     base = 11000 if label.startswith("ngc4151") else 21000
+    if matrix == "g235h_weak_boundary":
+        if not label.startswith("ngc4151"):
+            return []
+        weak_snr_levels = (3.75, 5.0, 6.25, 10.0)
+        cases = []
+        for donor_index, donor in enumerate(("primary", "alternate")):
+            for separation_index, separation in enumerate((300.0, 400.0)):
+                for weak_snr in weak_snr_levels:
+                    cases.append(
+                        {
+                            "name": (
+                                f"{donor}_real_double_sep{int(separation)}_"
+                                f"weak_snr{str(weak_snr).replace('.', 'p')}"
+                            ),
+                            "stage": "real_noise",
+                            "seed": (
+                                base
+                                + 9000
+                                + 100 * donor_index
+                                + 10 * separation_index
+                            ),
+                            "components": [
+                                InjectedComponent(
+                                    -separation / 2.0, 80.0, 15.0
+                                ),
+                                InjectedComponent(
+                                    separation / 2.0,
+                                    80.0,
+                                    15.0,
+                                    flux_scale=weak_snr / 15.0,
+                                ),
+                            ],
+                            "donor": donor,
+                            "effective_weak_component_snr": weak_snr,
+                        }
+                    )
+            for separation_index, separation in enumerate((400.0, 500.0)):
+                for weak_snr in weak_snr_levels:
+                    cases.append(
+                        {
+                            "name": (
+                                f"{donor}_real_triple_adj{int(separation)}_"
+                                f"weak_snr{str(weak_snr).replace('.', 'p')}"
+                            ),
+                            "stage": "real_noise",
+                            "seed": (
+                                base
+                                + 9500
+                                + 100 * donor_index
+                                + 10 * separation_index
+                            ),
+                            "components": [
+                                InjectedComponent(-separation, 80.0, 20.0),
+                                InjectedComponent(
+                                    0.0, 80.0, 20.0, flux_scale=0.5
+                                ),
+                                InjectedComponent(
+                                    separation,
+                                    80.0,
+                                    20.0,
+                                    flux_scale=weak_snr / 20.0,
+                                ),
+                            ],
+                            "donor": donor,
+                            "effective_weak_component_snr": weak_snr,
+                        }
+                    )
+        for case in cases:
+            case["name"] = f"{label}_{case['name']}"
+        return cases
+    if matrix == "powered_components":
+        double_patterns = (
+            ("sep300_equal", 300.0, 1.0),
+            ("sep300_ratio050", 300.0, 0.5),
+            ("sep300_ratio025", 300.0, 0.25),
+            ("sep400_ratio050", 400.0, 0.5),
+            ("sep400_ratio025", 400.0, 0.25),
+        )
+        triple_patterns = (
+            ("adj300_equal", 300.0, (1.0, 1.0, 1.0)),
+            ("adj400_equal", 400.0, (1.0, 1.0, 1.0)),
+            ("adj400_moderate", 400.0, (1.0, 0.75, 0.5)),
+            ("adj400_weak", 400.0, (1.0, 0.5, 0.25)),
+            ("adj500_weak", 500.0, (1.0, 0.5, 0.25)),
+        )
+        cases = []
+        for donor_index, donor in enumerate(("primary", "alternate")):
+            for pattern_index, (name, separation, ratio) in enumerate(
+                double_patterns
+            ):
+                cases.append(
+                    {
+                        "name": f"{donor}_real_double_{name}",
+                        "stage": "real_noise",
+                        "seed": (
+                            base + 8000 + 100 * donor_index + pattern_index
+                        ),
+                        "components": [
+                            InjectedComponent(-separation / 2.0, 80.0, 15.0),
+                            InjectedComponent(
+                                separation / 2.0,
+                                80.0,
+                                15.0,
+                                flux_scale=ratio,
+                            ),
+                        ],
+                        "donor": donor,
+                    }
+                )
+            for pattern_index, (name, separation, ratios) in enumerate(
+                triple_patterns
+            ):
+                cases.append(
+                    {
+                        "name": f"{donor}_real_triple_{name}",
+                        "stage": "real_noise",
+                        "seed": (
+                            base + 8500 + 100 * donor_index + pattern_index
+                        ),
+                        "components": [
+                            InjectedComponent(
+                                -separation,
+                                80.0,
+                                20.0,
+                                flux_scale=ratios[0],
+                            ),
+                            InjectedComponent(
+                                0.0,
+                                80.0,
+                                20.0,
+                                flux_scale=ratios[1],
+                            ),
+                            InjectedComponent(
+                                separation,
+                                80.0,
+                                20.0,
+                                flux_scale=ratios[2],
+                            ),
+                        ],
+                        "donor": donor,
+                    }
+                )
+        for case in cases:
+            case["name"] = f"{label}_{case['name']}"
+        return cases
     if matrix == "donor_replicates":
         cases = []
         for donor_index, donor in enumerate(("primary", "alternate")):
@@ -320,7 +492,8 @@ def summarize(scores: list[dict[str, Any]]) -> dict[str, Any]:
         ),
     }
     unreliable = sum(
-        score.get("selection_status") != "accepted" for score in scores
+        score.get("selection_status") not in ACCEPTED_SELECTION_STATUSES
+        for score in scores
     )
     gates = {
         "blank_false_positive_rate": None
@@ -389,6 +562,31 @@ def summarize(scores: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def adjudicate_manual_audit(score: dict[str, Any]) -> dict[str, Any]:
+    """Mark a completed tight rerun using the same semantics as rerun mode."""
+    adjudicated = dict(score)
+    status = adjudicated.get("selection_status")
+    reasons = set(adjudicated.get("selection_reasons", []))
+    if status == "accepted" or (
+        status == "convergence_unverified"
+        and reasons
+        and reasons <= {MODERATE_MAX_REASON}
+    ):
+        adjudicated["selection_status"] = "accepted_after_audit"
+    return adjudicated
+
+
+def merge_audited_scores(
+    screening_scores: list[dict[str, Any]],
+    audit_scores: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Replace screening scores with explicitly adjudicated tight reruns."""
+    merged = {score["spectrum_id"]: dict(score) for score in screening_scores}
+    for score in audit_scores:
+        merged[score["spectrum_id"]] = adjudicate_manual_audit(score)
+    return list(merged.values())
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -396,7 +594,13 @@ def main() -> int:
     )
     parser.add_argument(
         "--matrix",
-        choices=["core", "boundary", "donor_replicates"],
+        choices=[
+            "core",
+            "boundary",
+            "donor_replicates",
+            "powered_components",
+            "g235h_weak_boundary",
+        ],
         default="core",
     )
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
@@ -413,6 +617,14 @@ def main() -> int:
         "--correlated-noise",
         action="store_true",
         help="Use an AR(1) likelihood with rho estimated from continuum windows",
+    )
+    parser.add_argument(
+        "--automatic-rerun",
+        action="store_true",
+        help=(
+            "Use selection.audit.mode=rerun with a tighter audit sampling "
+            "profile for threshold-overlap or moderate maximum selections"
+        ),
     )
     parser.add_argument(
         "--only", action="append", default=[], metavar="CASE_NAME",
@@ -437,6 +649,8 @@ def main() -> int:
     all_cases = sum(len(cases) for cases in cases_by_dataset.values())
     completed = 0
     for label, specification in DATASETS.items():
+        if not cases_by_dataset[label]:
+            continue
         config = load_config(PROJECT / "examples" / specification["config"])
         science = load_coordinate(config, specification["science_xy"])
         donor = load_coordinate(config, specification["donor_xy"])
@@ -444,7 +658,12 @@ def main() -> int:
             config, specification["alternate_donor_xy"]
         )
         donors = {"primary": donor, "alternate": alternate_donor}
-        fit = validation_fit(specification, args.profile, args.correlated_noise)
+        fit = validation_fit(
+            specification,
+            args.profile,
+            args.correlated_noise,
+            args.automatic_rerun,
+        )
         line = specification["line"]
         observed = float(line["wavelength"]) * (1.0 + science.redshift)
         sigma = float(lsf_sigma_angstrom(observed, fit["lsf"], science.metadata))
@@ -527,6 +746,7 @@ def main() -> int:
             args.empirical_uncertainty_calibration
         ),
         "correlated_noise": args.correlated_noise,
+        "automatic_rerun": args.automatic_rerun,
         "scope": (
             "NIRSpec G235H/G395H controlled and block-resampled-real-residual "
             f"{args.matrix} matrix with {args.profile} profile"
@@ -549,6 +769,7 @@ def main() -> int:
                 args.empirical_uncertainty_calibration
             ),
             "correlated_noise": args.correlated_noise,
+            "automatic_rerun": args.automatic_rerun,
             "datasets": datasets_manifest,
         },
     )

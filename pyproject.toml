@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "beat-astro"
-version = "2.0.0a1"
+version = "2.0.0a2"
 description = "Bayesian Evidence Analysis Tool for multi-component emission-line fitting"
 readme = "README.md"
 requires-python = ">=3.9"

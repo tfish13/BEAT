@@ -197,11 +197,12 @@ The first two-stage MUSE injection/recovery framework and its recorded
 [the injection/recovery guide](docs/INJECTION_RECOVERY.md). The current result
 is a beta validation baseline, not final scientific certification.
 
-The bounded multi-instrument alpha run, H-alpha+[N II] injection pilot, and
-NGC 1365 broad-H-alpha comparison are summarized in
-[`validation/ALPHA_TEST_REPORT.md`](validation/ALPHA_TEST_REPORT.md). That
-report records passed adapter/model checks and the scientific gates that still
-fail; the project remains `2.0.0a1`.
+The bounded multi-instrument alpha work is summarized in
+[`validation/ALPHA_TEST_REPORT.md`](validation/ALPHA_TEST_REPORT.md). The
+powered MUSE and NIRSpec gates, bounded MIRI gate, nine-spaxel broad-H-alpha
+study, and synthetic 1D operational regression are complete within their
+documented supported domains. Version `2.0.0a2` is the frozen astronomer-pilot
+build; it is not yet a scientifically certified final release.
 
 The subsequent NGC 2992 audit found that the apparent H-alpha false component
 used a residual donor contaminated by native line wings. Injection utilities
@@ -222,10 +223,50 @@ triple at the same spacing is not stable under tight evidence; all tested
 patterns recover three at 400 km/s. These conditional boundaries are reported
 in [`validation/HALPHA_CONTROLLED_TRIPLE_CALIBRATION.md`](validation/HALPHA_CONTROLLED_TRIPLE_CALIBRATION.md).
 
+The frozen powered MUSE red gate uses real residuals from NGC 2992 and
+NGC 3393. In its documented supported domain it recovers 0/60 blank false
+positives and 20/20 singles, doubles, and triples, with no evidence flags and
+median absolute velocity, width, and flux errors of 4.91 km/s, 5.29%, and
+4.41%. A 16-case H-beta+[O III] check exercises the wavelength-dependent LSF
+near 5000 A. See
+[`validation/MUSE_POWERED_VALIDATION.md`](validation/MUSE_POWERED_VALIDATION.md).
+
 The NIRSpec validation uses bundled STScI G235H/G395H `R(lambda)` tables. Its
 16-case standard core recovers every zero-through-three-component count. A
 separate powered residual-noise gate exposed strong cube-pixel covariance;
 with empirical marginal-error calibration and the new opt-in AR(1) likelihood,
 it recovers 20/20 blanks and 20/20 S/N=10 singles with no evidence flags.
-Double/triple completeness is still underpowered; see
-[`validation/NIRSPEC_INJECTION_RECOVERY.md`](validation/NIRSPEC_INJECTION_RECOVERY.md).
+The powered double/triple expansion recovers 18/20 doubles and 17/20 triples
+after targeted standard-profile audits, passing the predeclared count and
+median-parameter-error thresholds. A paired weak-component experiment closes
+the scoped G235H reliability gate with a conservative supported alpha domain:
+effective component S/N>=10. All eight tested S/N=10 double/triple anchors are
+correct and accepted under standard sampling; lower-S/N components are
+explicitly exploratory. See
+[`validation/NIRSPEC_G235H_WEAK_COMPONENT_BOUNDARY.md`](validation/NIRSPEC_G235H_WEAK_COMPONENT_BOUNDARY.md).
+
+The bounded MIRI MRS gate selects the correct product in 24/24 checks spanning
+all 12 sub-bands for both supplied targets. On actual 2A, 3B, and 4C wavelength
+grids, it recovers all 24 reference blank/single/double counts and both
+controlled non-Gaussian profile-mismatch cases, with no evidence flags. The
+Gaussian-equivalent LSF is accepted only within the documented sampling,
+S/N, separation, and profile-shape limits; see
+[`validation/MIRI_BOUNDED_VALIDATION.md`](validation/MIRI_BOUNDED_VALIDATION.md).
+
+The NGC 1365 broad-H-alpha gate compares narrow-only, one-broad, and two-broad
+models across all nine nuclear spaxels under linear and quadratic continua.
+One broad component is required in every spaxel, while a second Gaussian is
+intermittent and fails the frozen spatial and continuum-stability criteria.
+Routine fitting should use one broad component; detailed BLR work may use a
+flexible asymmetric profile, without automatically assigning physical meaning
+to multiple broad Gaussians. See
+[`validation/NGC1365_BROAD_STABILITY.md`](validation/NGC1365_BROAD_STABILITY.md).
+
+The production 1D survey path has also passed a 512-row synthetic SDSS-like
+regression: 500 valid spectra reached one deterministic catalog, 12 malformed
+rows were isolated without losing successful outputs, a four-worker run was
+interrupted and resumed from 32 atomic checkpoints, and a one-worker override
+left every successful hash unchanged. A small real H-beta+[O III] set
+exercises selected component counts zero, one, and two. This is operational
+validation, not real-SDSS scientific completeness; see
+[`validation/SURVEY_1D_REGRESSION.md`](validation/SURVEY_1D_REGRESSION.md).

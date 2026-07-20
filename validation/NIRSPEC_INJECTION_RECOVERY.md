@@ -37,8 +37,44 @@ with rho estimated only from configured line-free continuum windows, yields:
 | Median absolute flux error | 6.46% | <=10% | pass |
 
 This is a statistically powered pass for the blank and single classes only.
-There are no double or triple cases in that 40-case matrix. The separate
-standard core verifies capability for those classes but remains underpowered.
+There are no double or triple cases in that 40-case matrix.
+
+Fourth, the powered double/triple expansion contains 20 cases in each class,
+balanced across G235H and G395H, primary and alternate residual donors, 300--
+500 km/s separations, and equal through 1:0.25 component ratios. The expanded
+screening profile recovered 16/20 doubles and 11/20 triples. Every incorrect
+or non-accepted selection was then rerun with the standard profile, giving the
+audited result:
+
+| Powered double/triple gate | Audited result | Threshold | Status |
+|---|---:|---:|---|
+| Double recovery | 18/20 (90%) | >=80% | pass |
+| Triple recovery | 17/20 (85%) | >=70% | pass |
+| Ambiguous/unverified selections | 3/40 | 0 | **fail** |
+| Median absolute velocity error | 6.00 km/s | <=10 km/s | pass |
+| Median absolute width error | 8.95% | <=15% | pass |
+| Median absolute flux error | 6.19% | <=10% | pass |
+
+The component-count and parameter-accuracy gates pass, but the predeclared
+overall gate remains failed because three standard-profile evidence
+comparisons overlap the selection threshold. The threshold was not relaxed
+after seeing the results. Final statuses are 23 `accepted`, 14
+`accepted_after_audit`, and 3 `ambiguous`.
+
+All 20 G395H counts are correct after audit. The five remaining count failures
+are all G235H weak-component cases: the alternate donor loses a 1:0.25 double
+at both 300 and 400 km/s; the primary donor loses 1:0.5:0.25 triples at 400
+and 500 km/s; and the alternate donor loses the weak triple at 500 km/s. A
+correctly recovered alternate-donor weak triple at 400 km/s is nevertheless
+ambiguous (`delta ln Z=5.44`), while the corresponding primary case is an
+ambiguous two-component selection (`delta ln Z=4.08`). The 300 km/s
+alternate-donor 1:0.25 double is also ambiguous (`delta ln Z=4.59`). These are
+conditional completeness/reliability boundaries, not software exceptions.
+
+Screening required 2169 seconds (36.2 minutes); the 17 targeted standard
+audits required 7284 seconds (121.4 minutes). This supports the intended
+operating pattern: screen large samples, then tightly rerun only flagged or
+scientifically critical spectra.
 
 ## Correlated-noise audit
 
@@ -92,7 +128,19 @@ uncertainty.
 - Final AR(1) matrix and worst-margin audit:
   `validation/nirspec_donor_replicates_ar1/` and
   `validation/nirspec_donor_replicates_ar1_audit/`
+- Powered double/triple matrix and targeted standard audit:
+  `validation/nirspec_powered_components_ar1/` and
+  `validation/nirspec_powered_components_ar1_audit/`. The reproducible merged
+  result is `validation/nirspec_powered_components_ar1/audited_summary.json`.
 - STScI source: [NIRSpec dispersers and filters](https://jwst-docs.stsci.edu/jwst-near-infrared-spectrograph/nirspec-instrumentation/nirspec-dispersers-and-filters)
 
-The next NIRSpec gate is a powered double/triple matrix across separation,
-flux ratio, donor, and grating. MIRI profile-shape validation remains separate.
+The powered NIRSpec count-accuracy gate is met. A paired 32-case G235H boundary
+experiment subsequently showed that recovery at weak-component S/N=3.75--6.25
+is donor- and geometry-dependent. The supported alpha domain therefore
+requires effective component S/N>=10. All eight tested S/N=10 double/triple
+anchors recover the correct count with accepted standard-profile evidence and
+no unexplained flags. Automatic rerun was exercised on all three earlier
+threshold-overlap cases: two flags resolved and the remaining S/N=5 triple is
+explicitly outside the supported domain. See
+`NIRSPEC_G235H_WEAK_COMPONENT_BOUNDARY.md`. MIRI profile-shape validation
+remains separate.

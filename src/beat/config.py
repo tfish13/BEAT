@@ -410,6 +410,10 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ConfigError("fit.sampling.dlogz must be positive")
     if sampling.get("stepsampler", "slice") not in {"slice", "none"}:
         raise ConfigError("fit.sampling.stepsampler must be slice or none")
+    if sampling.get("seed") is not None:
+        seed = sampling["seed"]
+        if not isinstance(seed, int) or isinstance(seed, bool) or seed < 0:
+            raise ConfigError("fit.sampling.seed must be a non-negative integer")
     audit_sampling = audit.get("sampling", {})
     if not isinstance(audit_sampling, dict):
         raise ConfigError("fit.selection.audit.sampling must be a mapping")

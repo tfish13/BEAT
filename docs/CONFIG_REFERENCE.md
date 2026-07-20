@@ -67,13 +67,15 @@ fixed `redshift` value. `id_header` overrides a filename-derived ID.
   -0.95 through 0.95. The resolved coefficient is stored in each result; and
 - `noise.marginal_scale`: a positive uncertainty multiplier or `auto`. Auto
   matches the robust continuum-residual scatter when formal uncertainties are
-  underestimated and never reduces them. The applied factor is serialized.
-  units;
+  underestimated and never reduces them. The applied factor is serialized;
 - `kinematics.max_components`: largest narrow-component model;
 - `kinematics.velocity_kms`: uniform velocity bounds;
 - `kinematics.sigma_kms`: log-uniform dispersion bounds;
 - `lines`: arbitrary rest wavelengths and optional fixed ratios;
 - `wavelength_medium`: `air` or `vacuum` (MUSE AWAV products require `air`);
+- `sampling.seed`: optional non-negative base seed. Batch runs derive and
+  record a deterministic per-spectrum sampler seed from this value and the
+  spectrum ID, independent of worker scheduling;
 - `lsf.model`: `none`, `instrument`, `resolving_power`,
   `polynomial_resolving_power`, `nirspec_etc_resolving_power`,
   `constant_fwhm_angstrom`,

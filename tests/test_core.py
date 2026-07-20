@@ -63,6 +63,13 @@ def blank_spectrum() -> Spectrum:
 
 
 class SpectrumTests(unittest.TestCase):
+    def test_all_invalid_pixels_raise_a_clear_validation_error(self) -> None:
+        spectrum = Spectrum(
+            "invalid", np.arange(5.0), np.full(5, np.nan), np.ones(5), 0.1
+        )
+        with self.assertRaisesRegex(ValueError, "fewer than two valid"):
+            spectrum.prepared()
+
     def test_prepared_sorts_masks_and_deduplicates(self) -> None:
         spectrum = Spectrum(
             "s",
@@ -685,6 +692,31 @@ class ConfigTests(unittest.TestCase):
 
 
 class PipelineTests(unittest.TestCase):
+    def test_configured_sampler_seed_is_stable_per_spectrum(self) -> None:
+        from beat.pipeline import spectrum_seed
+
+        fit = {"sampling": {"seed": 12345}}
+        self.assertEqual(spectrum_seed("target-a", fit), spectrum_seed("target-a", fit))
+        self.assertNotEqual(spectrum_seed("target-a", fit), spectrum_seed("target-b", fit))
+        self.assertIsNone(spectrum_seed("target-a", {"sampling": {}}))
+
+    def test_process_pool_tolerates_unreadable_macos_semaphore_limit(self) -> None:
+        import os
+        from unittest.mock import patch
+
+        from beat.pipeline import _process_executor
+
+        original = os.sysconf
+
+        def denied(name):
+            if name == "SC_SEM_NSEMS_MAX":
+                raise PermissionError(1, "not permitted")
+            return original(name)
+
+        with patch("os.sysconf", side_effect=denied):
+            executor = _process_executor(1)
+        executor.shutdown(wait=True)
+
     def test_atomic_checkpoint_catalog_and_resume(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
