@@ -97,6 +97,20 @@ def _slice_range(value: Any, size: int, name: str) -> range:
     return range(start, stop)
 
 
+def _valid_pixel_count(
+    wavelength: np.ndarray,
+    flux: np.ndarray,
+    uncertainty: np.ndarray | None,
+    mask: np.ndarray | None,
+) -> int:
+    valid = np.isfinite(wavelength) & np.isfinite(flux)
+    if uncertainty is not None:
+        valid &= np.isfinite(uncertainty) & (uncertainty > 0)
+    if mask is not None:
+        valid &= ~np.asarray(mask, dtype=bool).reshape(-1)
+    return int(valid.sum())
+
+
 def _fits() -> Any:
     try:
         from astropy.io import fits
@@ -194,6 +208,8 @@ def iter_cube(config: dict[str, Any]) -> Iterator[Spectrum]:
         uncertainty_kind = config.get("uncertainty_kind", "sigma")
         x_values = _slice_range(config.get("x_range"), nx, "input.x_range")
         y_values = _slice_range(config.get("y_range"), ny, "input.y_range")
+        skip_invalid = bool(config.get("skip_invalid_spaxels", False))
+        min_valid_pixels = int(config.get("min_valid_pixels", 2))
         target = config.get("target_id")
         if target is None and config.get("target_header"):
             target = hdul[config.get("target_header_hdu", 0)].header.get(
@@ -218,13 +234,22 @@ def iter_cube(config: dict[str, Any]) -> Iterator[Spectrum]:
                         pixel_mask = (
                             np.bitwise_and(raw_pixel_mask, int(config["mask_bits"])) != 0
                         )
+                spectrum_flux = np.asarray(flux[:, y, x], dtype=float) * flux_scale
+                spectrum_uncertainty = _uncertainty(
+                    raw_uncertainty, uncertainty_kind, uncertainty_scale
+                )
+                if skip_invalid and (
+                    _valid_pixel_count(
+                        wavelength, spectrum_flux, spectrum_uncertainty, pixel_mask
+                    )
+                    < min_valid_pixels
+                ):
+                    continue
                 yield Spectrum(
                     spectrum_id=f"{target}_x{x:04d}_y{y:04d}",
                     wavelength=wavelength,
-                    flux=np.asarray(flux[:, y, x], dtype=float) * flux_scale,
-                    uncertainty=_uncertainty(
-                        raw_uncertainty, uncertainty_kind, uncertainty_scale
-                    ),
+                    flux=spectrum_flux,
+                    uncertainty=spectrum_uncertainty,
                     redshift=redshift,
                     mask=pixel_mask,
                     metadata={

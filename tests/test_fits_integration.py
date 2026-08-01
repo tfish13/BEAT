@@ -159,6 +159,64 @@ class FitsAndUltraNestTests(unittest.TestCase):
             )
             self.assertTrue(spectrum.metadata["wavelength_table_used"])
 
+    def test_cube_iterator_can_skip_empty_nirspec_spaxels(self) -> None:
+        wave_micron = np.linspace(1.70, 1.80, 31)
+        cube = np.ones((wave_micron.size, 2, 2), dtype=np.float32)
+        cube[:, 0, 0] = np.nan
+        dq_cube = np.zeros(cube.shape, dtype=np.uint32)
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "nirspec_s3d.fits"
+            primary = fits.PrimaryHDU()
+            primary.header["TELESCOP"] = "JWST"
+            primary.header["INSTRUME"] = "NIRSPEC"
+            primary.header["EXP_TYPE"] = "NRS_IFU"
+            primary.header["DATAMODL"] = "IFUCubeModel"
+            primary.header["TARGNAME"] = "TEST NIRSPEC"
+            primary.header["GRATING"] = "G235H"
+            primary.header["FILTER"] = "F170LP"
+            science = fits.ImageHDU(cube, name="SCI")
+            science.header["CTYPE3"] = "WAVE"
+            science.header["CUNIT3"] = "um"
+            science.header["BUNIT"] = "MJy/sr"
+            error = fits.ImageHDU(np.full_like(cube, 0.25), name="ERR")
+            error.header["BUNIT"] = "MJy/sr"
+            dq = fits.ImageHDU(dq_cube, name="DQ")
+            wave_column = fits.Column(
+                name="wavelength",
+                format=f"{wave_micron.size}D",
+                array=[wave_micron],
+            )
+            wave_table = fits.BinTableHDU.from_columns(
+                [wave_column], name="WCS-TABLE"
+            )
+            fits.HDUList([primary, science, error, dq, wave_table]).writeto(path)
+
+            spectra = list(
+                iter_cube(
+                    {
+                        "adapter": "nirspec",
+                        "path": str(path),
+                        "flux_hdu": "SCI",
+                        "uncertainty_hdu": "ERR",
+                        "uncertainty_kind": "sigma",
+                        "mask_hdu": "DQ",
+                        "mask_bits": 1,
+                        "raw_integer_mask": True,
+                        "redshift": 0.01,
+                        "x_range": [0, 1],
+                        "y_range": [0, 2],
+                        "target_header": "TARGNAME",
+                        "target_header_hdu": 0,
+                        "skip_invalid_spaxels": True,
+                        "min_valid_pixels": 2,
+                    }
+                )
+            )
+            self.assertEqual(
+                [item.spectrum_id for item in spectra],
+                ["TEST NIRSPEC_x0000_y0001"],
+            )
+
     def test_muse_adapter_validates_and_preserves_provenance(self) -> None:
         wave = np.linspace(4800.0, 5100.0, 61)
         cube = np.ones((wave.size, 4, 5), dtype=np.float32)
