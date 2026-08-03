@@ -10,7 +10,7 @@ import numpy as np
 
 from beat.config import ConfigError, load_config, validate_config
 from beat.data import linear_wavelength
-from beat.fitting import fit_spectrum
+from beat.fitting import fit_spectrum, make_diagnostic_plot
 from beat.injection import (
     InjectedComponent,
     analytic_injection_spectrum,
@@ -19,7 +19,14 @@ from beat.injection import (
     score_recovery,
 )
 from beat.lsf import FWHM_TO_SIGMA, lsf_sigma_angstrom
-from beat.model import ModelDefinition, convolved_sigma, prepare_spectrum, relativistic_doppler
+from beat.model import (
+    ModelDefinition,
+    convolved_sigma,
+    gaussian_integrated,
+    observed_center,
+    prepare_spectrum,
+    relativistic_doppler,
+)
 from beat.pipeline import run_pipeline
 from beat.spectrum import Spectrum
 
@@ -107,6 +114,79 @@ class ModelTests(unittest.TestCase):
             )
         )
 
+    def test_likelihood_mask_retains_pixels_but_gives_them_zero_weight(self) -> None:
+        config = fit_config(max_components=0)
+        config["likelihood_masks"] = [[4900.0, 4920.0]]
+        baseline = blank_spectrum()
+        contaminated_flux = baseline.flux.copy()
+        contaminated_flux[
+            (baseline.wavelength >= 4900.0) & (baseline.wavelength <= 4920.0)
+        ] = 1.0e12
+        contaminated = Spectrum(
+            "contaminated",
+            baseline.wavelength,
+            contaminated_flux,
+            baseline.uncertainty,
+            baseline.redshift,
+        )
+        clean_prepared = prepare_spectrum(baseline, config)
+        contaminated_prepared = prepare_spectrum(contaminated, config)
+        self.assertTrue(np.any(contaminated_prepared.likelihood_mask))
+        self.assertTrue(
+            np.any(
+                (contaminated_prepared.wavelength >= 4900.0)
+                & (contaminated_prepared.wavelength <= 4920.0)
+            )
+        )
+        clean_loglike = ModelDefinition(clean_prepared, config, 0).log_likelihood(
+            np.array([0.0])
+        )
+        contaminated_loglike = ModelDefinition(
+            contaminated_prepared, config, 0
+        ).log_likelihood(np.array([0.0]))
+        self.assertEqual(clean_loglike, contaminated_loglike)
+        np.testing.assert_array_equal(
+            clean_prepared.continuum_center,
+            contaminated_prepared.continuum_center,
+        )
+        self.assertEqual(clean_prepared.noise_level, contaminated_prepared.noise_level)
+        self.assertEqual(clean_prepared.positive_peak, contaminated_prepared.positive_peak)
+
+    def test_likelihood_mask_can_be_padded_in_lsf_resolution_elements(self) -> None:
+        config = fit_config(max_components=0)
+        config["lsf"] = {"model": "constant_fwhm_angstrom", "value": 4.0}
+        config["likelihood_masks"] = [
+            {
+                "name": "contaminant",
+                "window": [4900.0, 4920.0],
+                "padding_resolution_elements": 2.5,
+            }
+        ]
+        prepared = prepare_spectrum(blank_spectrum(), config)
+        resolved = prepared.likelihood_masks[0]
+        np.testing.assert_allclose(resolved["observed_window"], [4890.0, 4930.0])
+
+    def test_component_support_rejects_a_gaussian_anchored_in_mask(self) -> None:
+        config = fit_config(max_components=1)
+        config["likelihood_masks"] = [[4998.0, 5002.0]]
+        config["component_support"] = {"line": "oiii5007"}
+        prepared = prepare_spectrum(blank_spectrum(), config)
+        model = ModelDefinition(prepared, config, 1)
+        parameters = model.prior_transform(np.full(model.ndim, 0.5))
+        by_name = {name: index for index, name in enumerate(model.parameter_names)}
+        target_center = 5000.0
+        ratio = target_center / 5006.84
+        beta = (ratio**2 - 1.0) / (ratio**2 + 1.0)
+        parameters[by_name["component.1.velocity_kms"]] = beta * 299_792.458
+        parameters[by_name["component.1.sigma_kms"]] = 100.0
+        diagnostics = model.component_support_diagnostics(parameters)
+        self.assertFalse(diagnostics[0]["supported"])
+        self.assertIn(
+            "centroid_inside_likelihood_mask",
+            diagnostics[0]["lines"][0]["reasons"],
+        )
+        self.assertLess(model.log_likelihood(parameters), -1.0e50)
+
     def test_ar1_noise_correlation_is_estimated_from_continuum(self) -> None:
         config = fit_config(max_components=0)
         config["noise"] = {"model": "ar1", "rho": "auto"}
@@ -181,13 +261,13 @@ class ModelTests(unittest.TestCase):
         params = model.prior_transform(unit)
         self.assertLess(params[1], params[5])
 
-    def test_three_component_model_is_parameterized_generically(self) -> None:
-        config = fit_config(max_components=3)
+    def test_four_component_model_is_parameterized_generically(self) -> None:
+        config = fit_config(max_components=4)
         prepared = prepare_spectrum(blank_spectrum(), config)
-        model = ModelDefinition(prepared, config, 3)
-        self.assertEqual(model.n_components, 3)
-        self.assertIn("component.3.velocity_kms", model.parameter_names)
-        self.assertIn("component.3.oiii5007.flux", model.parameter_names)
+        model = ModelDefinition(prepared, config, 4)
+        self.assertEqual(model.n_components, 4)
+        self.assertIn("component.4.velocity_kms", model.parameter_names)
+        self.assertIn("component.4.oiii5007.flux", model.parameter_names)
         params = model.prior_transform(np.full(model.ndim, 0.5))
         self.assertTrue(np.all(np.isfinite(model.evaluate(params))))
 
@@ -314,7 +394,170 @@ class AdaptiveFakeSampler(FakeSampler):
         }
 
 
+class H2WingEvidenceSampler:
+    """Deterministic likelihood/BIC proxy for the masked H2-wing regression."""
+
+    def __init__(self, names, loglike, transform):
+        self.names = names
+        self.loglike = loglike
+
+    def run(self, **kwargs):
+        point = np.zeros(len(self.names), dtype=float)
+        component_numbers = sorted(
+            {
+                int(name.split(".")[1])
+                for name in self.names
+                if name.startswith("component.")
+            }
+        )
+        n_components = len(component_numbers)
+        proposals = {
+            0: [],
+            1: [(-100.0, 80.0, 800.0)],
+            2: [(-100.0, 80.0, 800.0), (250.0, 90.0, 700.0)],
+            3: [
+                (-520.0, 300.0, 1600.0),
+                (-100.0, 80.0, 800.0),
+                (250.0, 90.0, 700.0),
+            ],
+        }[n_components]
+        by_name = {name: index for index, name in enumerate(self.names)}
+        for component, (velocity, sigma, flux) in enumerate(proposals, start=1):
+            prefix = f"component.{component}"
+            point[by_name[f"{prefix}.velocity_kms"]] = velocity
+            point[by_name[f"{prefix}.sigma_kms"]] = sigma
+            point[by_name[f"{prefix}.sivi_1963.flux"]] = flux
+        loglike = float(self.loglike(point))
+        if np.isfinite(loglike):
+            logz = loglike - 0.5 * len(self.names) * np.log(360.0)
+        else:
+            logz = float("-inf")
+        return {
+            "logz": logz,
+            "logzerr": 0.0,
+            "ncall": 1,
+            "maximum_likelihood": {"point": point, "logl": loglike},
+            "posterior": {"median": point, "stdev": np.zeros_like(point)},
+        }
+
+
+def sivi_h2_wing_regression() -> tuple[Spectrum, dict]:
+    wavelength = np.arange(19380.0, 19880.0, 1.0)
+    uncertainty = np.full_like(wavelength, 0.2)
+    line = 19634.1
+    lsf = {"model": "constant_fwhm_angstrom", "value": 8.0}
+    # A small deterministic baseline ripple gives the continuum estimator a
+    # finite scatter without introducing a stochastic regression.
+    flux = 0.02 * np.sin(wavelength / 7.0)
+    for velocity, sigma_kms, integrated_flux in (
+        (-100.0, 80.0, 800.0),
+        (250.0, 90.0, 700.0),
+    ):
+        flux += gaussian_integrated(
+            wavelength,
+            observed_center(line, 0.0, velocity),
+            convolved_sigma(line, 0.0, sigma_kms, velocity, lsf, {}),
+            integrated_flux,
+        )
+    # This broad contaminant is centered inside the H2 mask. Its red wing
+    # survives outside the interval and can otherwise be rewarded as a third
+    # blueshifted [Si VI] Gaussian.
+    flux += gaussian_integrated(wavelength, 19600.0, 19.6, 1600.0)
+    spectrum = Spectrum(
+        "sivi-h2-wing",
+        wavelength,
+        flux,
+        uncertainty,
+        redshift=0.0,
+    )
+    config = {
+        "frame": "rest",
+        "window": [19380.0, 19879.0],
+        "minimum_valid_pixels": 100,
+        "continuum": {
+            "degree": 0,
+            "windows": [[19380.0, 19450.0], [19810.0, 19879.0]],
+        },
+        "noise": {"model": "independent"},
+        "kinematics": {
+            "max_components": 3,
+            "velocity_kms": [-1200.0, 1200.0],
+            "sigma_kms": [30.0, 500.0],
+        },
+        "lines": [
+            {
+                "name": "sivi_1963",
+                "wavelength": line,
+                "flux_bounds": [1.0, 5000.0],
+            }
+        ],
+        "lsf": lsf,
+        "likelihood_masks": [
+            {"name": "h2", "window": [19545.0, 19605.0]}
+        ],
+        "component_support": {
+            "enabled": True,
+            "line": "sivi_1963",
+            "max_masked_fraction": 0.5,
+            "minimum_centroid_distance_sigma": 0.5,
+            "coverage_sigma": 2.0,
+            "minimum_unmasked_pixels_each_side": 1,
+        },
+        "flux_prior": {"min_snr": 0.1, "max_signal_factor": 20.0},
+        "selection": {
+            "delta_logz": 5.0,
+            "stop_when_not_preferred": True,
+            "audit": {"mode": "none"},
+        },
+        "sampling": {"min_num_live_points": 40, "min_ess": 20, "dlogz": 1.0},
+    }
+    return spectrum, config
+
+
 class FitTests(unittest.TestCase):
+    def test_masked_pixel_values_do_not_change_evidence_input(self) -> None:
+        class LikelihoodProbeSampler:
+            def __init__(self, names, loglike, transform):
+                self.names = names
+                self.loglike = loglike
+                self.transform = transform
+
+            def run(self, **kwargs):
+                point = self.transform(np.full(len(self.names), 0.5))
+                loglike = self.loglike(point)
+                return {
+                    "logz": loglike,
+                    "logzerr": 0.0,
+                    "ncall": 1,
+                    "maximum_likelihood": {"point": point, "logl": loglike},
+                    "posterior": {
+                        "median": point,
+                        "stdev": np.zeros_like(point),
+                    },
+                }
+
+        config = fit_config(max_components=0)
+        config["likelihood_masks"] = [[4900.0, 4920.0]]
+        clean = blank_spectrum()
+        flux = clean.flux.copy()
+        flux[(clean.wavelength >= 4900.0) & (clean.wavelength <= 4920.0)] = 1.0e15
+        contaminated = Spectrum(
+            "contaminated-evidence",
+            clean.wavelength,
+            flux,
+            clean.uncertainty,
+            clean.redshift,
+        )
+        clean_result = fit_spectrum(
+            clean, config, sampler_factory=LikelihoodProbeSampler
+        )
+        contaminated_result = fit_spectrum(
+            contaminated, config, sampler_factory=LikelihoodProbeSampler
+        )
+        self.assertEqual(
+            clean_result["selected_logz"], contaminated_result["selected_logz"]
+        )
+
     def test_evidence_selection_stops_after_rejected_model(self) -> None:
         result = fit_spectrum(blank_spectrum(), fit_config(), sampler_factory=FakeSampler)
         self.assertEqual(result["selected_components"], 1)
@@ -323,6 +566,39 @@ class FitTests(unittest.TestCase):
         self.assertAlmostEqual(
             line_fluxes["oiii4959"]["flux"], line_fluxes["oiii5007"]["flux"] / 3.0
         )
+
+    def test_masked_h2_wing_is_not_selected_as_third_sivi_component(self) -> None:
+        spectrum, config = sivi_h2_wing_regression()
+        unsupported = dict(config)
+        unsupported["component_support"] = {"enabled": False}
+        unguarded = fit_spectrum(
+            spectrum, unsupported, sampler_factory=H2WingEvidenceSampler
+        )
+        guarded = fit_spectrum(
+            spectrum, config, sampler_factory=H2WingEvidenceSampler
+        )
+        self.assertEqual(unguarded["selected_components"], 3)
+        self.assertEqual(guarded["selected_components"], 2)
+        self.assertEqual(
+            [round(item["velocity_kms"]) for item in guarded["components"]],
+            [-100, 250],
+        )
+        rejected = guarded["models"][-1]["component_support"][0]
+        self.assertFalse(rejected["supported"])
+        self.assertGreater(guarded["n_likelihood_masked_pixels"], 0)
+
+    def test_diagnostic_plot_shades_and_displays_likelihood_mask(self) -> None:
+        spectrum, config = sivi_h2_wing_regression()
+        result = fit_spectrum(
+            spectrum, config, sampler_factory=H2WingEvidenceSampler
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "masked.png"
+            with patch("matplotlib.axes.Axes.axvspan") as spans:
+                make_diagnostic_plot(spectrum, config, result, path)
+            self.assertEqual(spans.call_count, 2)
+            self.assertTrue(path.exists())
+            self.assertGreater(path.stat().st_size, 0)
 
     def test_moderate_max_component_selection_is_flagged(self) -> None:
         config = fit_config(max_components=3)
