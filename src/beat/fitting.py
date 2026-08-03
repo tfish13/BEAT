@@ -74,6 +74,7 @@ def _run_model(
     )
     median = _result_value(result, "posterior", "median", maximum)
     stdev = _result_value(result, "posterior", "stdev", np.full(model.ndim, np.nan))
+    support = model.component_support_diagnostics(maximum)
     return {
         "n_components": model.n_components,
         "logz": float(result["logz"]),
@@ -86,6 +87,7 @@ def _run_model(
             result.get("maximum_likelihood", {}).get("logl", np.nan)
         ),
         "ncall": int(result.get("ncall", 0)),
+        "component_support": support,
     }
 
 
@@ -211,7 +213,10 @@ def _fit_spectrum_once(
         "redshift": prepared.spectrum.redshift,
         "metadata": prepared.spectrum.metadata,
         "n_input_pixels": int(prepared.spectrum.wavelength.size),
-        "n_fit_pixels": int(prepared.wavelength.size),
+        "n_fit_pixels": int((~prepared.likelihood_mask).sum()),
+        "n_plot_pixels": int(prepared.wavelength.size),
+        "n_likelihood_masked_pixels": int(prepared.likelihood_mask.sum()),
+        "likelihood_masks": prepared.likelihood_masks,
         "noise_level": prepared.noise_level,
         "noise_model": prepared.noise_model,
         "noise_rho": prepared.noise_rho,
@@ -474,6 +479,25 @@ def make_diagnostic_plot(
         step="mid",
         label=r"$1\sigma$ uncertainty",
     )
+    for index, specification in enumerate(prepared.likelihood_masks):
+        mask_lo, mask_hi = specification["observed_window"]
+        ax.axvspan(
+            mask_lo,
+            mask_hi,
+            facecolor="tab:red",
+            edgecolor="tab:red",
+            alpha=0.12,
+            hatch="//",
+            label="likelihood mask (zero weight)" if index == 0 else None,
+        )
+        residual_ax.axvspan(
+            mask_lo,
+            mask_hi,
+            facecolor="tab:red",
+            edgecolor="tab:red",
+            alpha=0.12,
+            hatch="//",
+        )
     ax.set_ylabel("Flux density")
     ax.set_title(
         f"{spectrum.spectrum_id}: {n_components} component(s), "
