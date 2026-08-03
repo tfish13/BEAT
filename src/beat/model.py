@@ -3,17 +3,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import erf, sqrt
 from typing import Any
 
 import numpy as np
 
 from .config import ConfigError
-from .lsf import lsf_sigma_angstrom
+from .lsf import FWHM_TO_SIGMA, lsf_sigma_angstrom
 from .spectrum import Spectrum
 
 
 C_KMS = 299_792.458
 SQRT_2PI = float(np.sqrt(2.0 * np.pi))
+# UltraNest requires finite values during its likelihood startup probe. This
+# finite floor is numerically indistinguishable from zero posterior weight.
+REJECTED_LOG_LIKELIHOOD = -1.0e100
 
 
 def robust_sigma(values: np.ndarray) -> float:
@@ -126,6 +130,76 @@ class PreparedSpectrum:
     noise_marginal_scale: float
     positive_peak: float
     default_flux_bounds: tuple[float, float]
+    likelihood_mask: np.ndarray
+    likelihood_masks: list[dict[str, Any]]
+
+
+def _resolved_likelihood_masks(
+    spectrum: Spectrum,
+    fit: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Resolve configured zero-weight wavelength masks in observed Angstrom."""
+    frame = fit.get("frame", "rest")
+    lsf_config = fit.get("lsf", {"model": "none"})
+    resolved: list[dict[str, Any]] = []
+    for index, raw in enumerate(fit.get("likelihood_masks", [])):
+        specification = {"window": raw} if isinstance(raw, (list, tuple)) else raw
+        window = specification["window"]
+        lo, hi = observed_interval(window, frame, spectrum.redshift)
+
+        padding_angstrom = float(specification.get("padding_angstrom", 0.0))
+        if frame == "rest":
+            padding_angstrom *= 1.0 + spectrum.redshift
+        resolution_elements = float(
+            specification.get("padding_resolution_elements", 0.0)
+        )
+        resolution_padding_lo = 0.0
+        resolution_padding_hi = 0.0
+        if resolution_elements > 0:
+            sigma_edges = np.asarray(
+                lsf_sigma_angstrom(
+                    np.array([lo, hi]), lsf_config, spectrum.metadata
+                ),
+                dtype=float,
+            )
+            if np.any(sigma_edges <= 0):
+                raise ValueError(
+                    "fit.likelihood_masks padding_resolution_elements requires "
+                    "a positive LSF"
+                )
+            resolution_padding_lo = float(
+                resolution_elements * sigma_edges[0] / FWHM_TO_SIGMA
+            )
+            resolution_padding_hi = float(
+                resolution_elements * sigma_edges[1] / FWHM_TO_SIGMA
+            )
+        observed_lo = lo - padding_angstrom - resolution_padding_lo
+        observed_hi = hi + padding_angstrom + resolution_padding_hi
+        resolved.append(
+            {
+                "name": str(specification.get("name", f"mask_{index + 1}")),
+                "configured_window": [float(window[0]), float(window[1])],
+                "observed_window": [observed_lo, observed_hi],
+                "padding_angstrom_observed": padding_angstrom,
+                "padding_resolution_elements": resolution_elements,
+            }
+        )
+    return resolved
+
+
+def _merged_intervals(intervals: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """Return the union of increasing wavelength intervals."""
+    if not intervals:
+        return []
+    ordered = sorted(intervals)
+    merged = [ordered[0]]
+    for lo, hi in ordered[1:]:
+        previous_lo, previous_hi = merged[-1]
+        if lo <= previous_hi:
+            merged[-1] = (previous_lo, max(previous_hi, hi))
+        else:
+            merged.append((lo, hi))
+    return merged
 
 
 def prepare_spectrum(spectrum: Spectrum, fit: dict[str, Any]) -> PreparedSpectrum:
@@ -142,10 +216,23 @@ def prepare_spectrum(spectrum: Spectrum, fit: dict[str, Any]) -> PreparedSpectru
             (spectrum.wavelength >= excluded_lo)
             & (spectrum.wavelength <= excluded_hi)
         )
+    wavelength = spectrum.wavelength[selected]
+    flux = spectrum.flux[selected]
+    uncertainty = None if spectrum.uncertainty is None else spectrum.uncertainty[selected]
+    likelihood_masks = _resolved_likelihood_masks(spectrum, fit)
+    likelihood_mask = np.zeros(wavelength.size, dtype=bool)
+    for specification in likelihood_masks:
+        mask_lo, mask_hi = specification["observed_window"]
+        pixels = (wavelength >= mask_lo) & (wavelength <= mask_hi)
+        likelihood_mask |= pixels
+        specification["masked_pixels"] = int(pixels.sum())
+
+    likelihood_selected = ~likelihood_mask
     minimum = int(fit.get("minimum_valid_pixels", 20))
-    if selected.sum() < minimum:
+    if likelihood_selected.sum() < minimum:
         raise ValueError(
-            f"{spectrum.spectrum_id}: fitting window contains {selected.sum()} valid "
+            f"{spectrum.spectrum_id}: fitting window contains "
+            f"{likelihood_selected.sum()} unmasked valid "
             f"pixels; at least {minimum} are required"
         )
 
@@ -163,15 +250,19 @@ def prepare_spectrum(spectrum: Spectrum, fit: dict[str, Any]) -> PreparedSpectru
                     f"{spectrum.spectrum_id}: systemic center for {line['name']} "
                     "falls inside fit.exclude_windows"
                 )
+        for specification in likelihood_masks:
+            mask_lo, mask_hi = specification["observed_window"]
+            if mask_lo <= center <= mask_hi:
+                raise ValueError(
+                    f"{spectrum.spectrum_id}: systemic center for {line['name']} "
+                    "falls inside fit.likelihood_masks"
+                )
     if outside:
         raise ValueError(
             f"{spectrum.spectrum_id}: systemic line center(s) outside the fit window: "
             + ", ".join(outside)
         )
 
-    wavelength = spectrum.wavelength[selected]
-    flux = spectrum.flux[selected]
-    uncertainty = None if spectrum.uncertainty is None else spectrum.uncertainty[selected]
     midpoint = 0.5 * (lo + hi)
     half_range = 0.5 * (hi - lo)
     x_normalized = (wavelength - midpoint) / half_range
@@ -182,12 +273,13 @@ def prepare_spectrum(spectrum: Spectrum, fit: dict[str, Any]) -> PreparedSpectru
     for window in continuum_config.get("windows", []):
         window_lo, window_hi = observed_interval(window, frame, spectrum.redshift)
         continuum_mask |= (wavelength >= window_lo) & (wavelength <= window_hi)
+    continuum_mask &= likelihood_selected
     if continuum_config.get("windows") and continuum_mask.sum() < max(8, degree + 2):
         raise ValueError(
             f"{spectrum.spectrum_id}: configured continuum windows contain too few pixels"
         )
     if not continuum_config.get("windows"):
-        continuum_mask[:] = True
+        continuum_mask[:] = likelihood_selected
 
     coefficients, continuum_scatter = _sigma_clip_polyfit(
         x_normalized[continuum_mask], flux[continuum_mask], degree
@@ -217,7 +309,9 @@ def prepare_spectrum(spectrum: Spectrum, fit: dict[str, Any]) -> PreparedSpectru
         noise_marginal_scale = float(configured_marginal_scale)
     uncertainty = uncertainty * noise_marginal_scale
 
-    noise_level = float(np.median(uncertainty[np.isfinite(uncertainty)]))
+    noise_level = float(
+        np.median(uncertainty[likelihood_selected & np.isfinite(uncertainty)])
+    )
     if not np.isfinite(noise_level) or noise_level <= 0:
         raise ValueError(f"{spectrum.spectrum_id}: invalid uncertainty values")
     if not np.isfinite(continuum_scatter) or continuum_scatter <= 0:
@@ -282,7 +376,9 @@ def prepare_spectrum(spectrum: Spectrum, fit: dict[str, Any]) -> PreparedSpectru
         for rest in rest_wavelengths
     )
     baseline = np.polynomial.polynomial.polyval(x_normalized, coefficients)
-    positive_peak = float(np.max(np.maximum(flux - baseline, 0.0)))
+    positive_peak = float(
+        np.max(np.maximum(flux[likelihood_selected] - baseline[likelihood_selected], 0.0))
+    )
     flux_prior = fit.get("flux_prior", {})
     lower = (
         float(flux_prior.get("min_snr", 0.1))
@@ -313,6 +409,8 @@ def prepare_spectrum(spectrum: Spectrum, fit: dict[str, Any]) -> PreparedSpectru
         noise_marginal_scale=noise_marginal_scale,
         positive_peak=positive_peak,
         default_flux_bounds=(lower, upper),
+        likelihood_mask=likelihood_mask,
+        likelihood_masks=likelihood_masks,
     )
 
 
@@ -333,6 +431,129 @@ class ModelDefinition:
         self.parameter_names = self._parameter_names()
         self._validate_fixed_components()
         self._validate_broad_components()
+
+    def component_support_diagnostics(
+        self, params: np.ndarray
+    ) -> list[dict[str, Any]]:
+        """Assess whether each free narrow component is constrained off-mask."""
+        support = self.fit.get("component_support", {})
+        enabled = bool(
+            support.get("enabled", bool(self.prepared.likelihood_masks))
+        )
+        if not enabled or not self.prepared.likelihood_masks or self.n_components == 0:
+            return []
+
+        requested_line = support.get("line")
+        if requested_line is None:
+            lines = self.free_lines
+        else:
+            lines = [self.line_by_name[str(requested_line)]]
+        intervals = _merged_intervals(
+            [
+                tuple(map(float, item["observed_window"]))
+                for item in self.prepared.likelihood_masks
+            ]
+        )
+        max_masked_fraction = float(support.get("max_masked_fraction", 0.5))
+        reject_centroid = bool(support.get("reject_centroid_inside", True))
+        minimum_distance_sigma = float(
+            support.get("minimum_centroid_distance_sigma", 0.5)
+        )
+        coverage_sigma = float(support.get("coverage_sigma", 2.0))
+        minimum_each_side = int(
+            support.get("minimum_unmasked_pixels_each_side", 1)
+        )
+        active = ~self.prepared.likelihood_mask
+        wavelength = self.prepared.wavelength
+        by_name = dict(zip(self.parameter_names, np.asarray(params, dtype=float)))
+        diagnostics: list[dict[str, Any]] = []
+
+        for component in range(1, self.n_components + 1):
+            prefix = f"component.{component}"
+            velocity = float(by_name[f"{prefix}.velocity_kms"])
+            sigma_kms = float(by_name[f"{prefix}.sigma_kms"])
+            line_diagnostics = []
+            component_supported = True
+            for line in lines:
+                rest = float(line["wavelength"])
+                center = observed_center(
+                    rest, self.prepared.spectrum.redshift, velocity
+                )
+                sigma = convolved_sigma(
+                    rest,
+                    self.prepared.spectrum.redshift,
+                    sigma_kms,
+                    velocity,
+                    self.lsf_config,
+                    self.prepared.spectrum.metadata,
+                )
+                masked_fraction = 0.0
+                centroid_inside = False
+                distance_to_mask = float("inf")
+                for mask_lo, mask_hi in intervals:
+                    centroid_inside |= mask_lo <= center <= mask_hi
+                    if center < mask_lo:
+                        distance_to_mask = min(distance_to_mask, mask_lo - center)
+                    elif center > mask_hi:
+                        distance_to_mask = min(distance_to_mask, center - mask_hi)
+                    else:
+                        distance_to_mask = 0.0
+                    z_lo = (mask_lo - center) / (sqrt(2.0) * sigma)
+                    z_hi = (mask_hi - center) / (sqrt(2.0) * sigma)
+                    masked_fraction += 0.5 * (erf(z_hi) - erf(z_lo))
+                masked_fraction = float(np.clip(masked_fraction, 0.0, 1.0))
+                left_pixels = int(
+                    np.sum(
+                        active
+                        & (wavelength < center)
+                        & (wavelength >= center - coverage_sigma * sigma)
+                    )
+                )
+                right_pixels = int(
+                    np.sum(
+                        active
+                        & (wavelength > center)
+                        & (wavelength <= center + coverage_sigma * sigma)
+                    )
+                )
+                reasons = []
+                if reject_centroid and centroid_inside:
+                    reasons.append("centroid_inside_likelihood_mask")
+                if masked_fraction > max_masked_fraction:
+                    reasons.append("masked_profile_fraction_exceeds_limit")
+                if distance_to_mask / sigma < minimum_distance_sigma:
+                    reasons.append("centroid_too_close_to_likelihood_mask")
+                if left_pixels < minimum_each_side:
+                    reasons.append("insufficient_unmasked_pixels_blueward")
+                if right_pixels < minimum_each_side:
+                    reasons.append("insufficient_unmasked_pixels_redward")
+                supported = not reasons
+                component_supported &= supported
+                line_diagnostics.append(
+                    {
+                        "line": str(line["name"]),
+                        "supported": supported,
+                        "reasons": reasons,
+                        "observed_center_angstrom": center,
+                        "convolved_sigma_angstrom": sigma,
+                        "masked_profile_fraction": masked_fraction,
+                        "centroid_distance_from_mask_sigma": (
+                            None
+                            if not np.isfinite(distance_to_mask)
+                            else float(distance_to_mask / sigma)
+                        ),
+                        "unmasked_pixels_blueward": left_pixels,
+                        "unmasked_pixels_redward": right_pixels,
+                    }
+                )
+            diagnostics.append(
+                {
+                    "component": component,
+                    "supported": component_supported,
+                    "lines": line_diagnostics,
+                }
+            )
+        return diagnostics
 
     def _validate_fixed_components(self) -> None:
         names: set[str] = set()
@@ -557,8 +778,15 @@ class ModelDefinition:
         return model
 
     def log_likelihood(self, params: np.ndarray) -> float:
-        residual = (self.prepared.flux - self.evaluate(params)) / self.prepared.uncertainty
-        log_variance = 2.0 * np.log(self.prepared.uncertainty)
+        support = self.component_support_diagnostics(params)
+        if any(not item["supported"] for item in support):
+            return REJECTED_LOG_LIKELIHOOD
+        active = ~self.prepared.likelihood_mask
+        uncertainty = self.prepared.uncertainty[active]
+        residual = (
+            self.prepared.flux[active] - self.evaluate(params)[active]
+        ) / uncertainty
+        log_variance = 2.0 * np.log(uncertainty)
         if self.prepared.noise_model == "independent":
             return float(
                 -0.5
@@ -568,7 +796,7 @@ class ModelDefinition:
         # A stationary AR(1) process on an irregular wavelength grid is the
         # exponential-covariance Markov model.  Scaling rho by the local pixel
         # separation avoids correlating across gaps in masked spectra.
-        spacing = np.diff(self.prepared.wavelength)
+        spacing = np.diff(self.prepared.wavelength[active])
         typical_spacing = float(np.median(spacing[spacing > 0]))
         phi = np.sign(self.prepared.noise_rho) * np.abs(
             self.prepared.noise_rho
