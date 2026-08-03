@@ -149,6 +149,10 @@ def flatten_result(result: dict[str, Any]) -> dict[str, Any]:
         "noise_level": result["noise_level"],
         "n_input_pixels": result["n_input_pixels"],
         "n_fit_pixels": result["n_fit_pixels"],
+        "n_plot_pixels": result.get("n_plot_pixels", result["n_fit_pixels"]),
+        "n_likelihood_masked_pixels": result.get(
+            "n_likelihood_masked_pixels", 0
+        ),
     }
     for key, value in result.get("metadata", {}).items():
         if np.isscalar(value) or value is None:
