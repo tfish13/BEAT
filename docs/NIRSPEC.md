@@ -64,8 +64,12 @@ small-aperture extractions.
 
 Known nearby lines should not be left for the component model to absorb. The
 NGC 4151 example uses a broad continuum window for stable noise estimation and
-`fit.exclude_windows` around H2 1-0 S(3), whose wavelength otherwise overlaps
-the allowed high-velocity [Si VI] range.
+a zero-weight `fit.likelihood_masks` interval around H2 1-0 S(3), padded by 2
+instrumental resolution elements. The excluded samples remain visible in the
+plot but do not enter the continuum/noise estimate, likelihood normalization,
+or evidence. `fit.component_support` also rejects a putative [Si VI] Gaussian
+whose centroid or most of its profile lies in the H2 mask, which lacks
+two-sided unmasked support, or which hugs the mask boundary.
 
 ## Injection/recovery validation
 
