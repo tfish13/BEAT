@@ -215,6 +215,64 @@ def validate_config(config: dict[str, Any]) -> None:
     _pair(_require(fit, "window", "fit"), "fit.window")
     for index, window in enumerate(fit.get("exclude_windows", [])):
         _pair(window, f"fit.exclude_windows[{index}]")
+    likelihood_masks = fit.get("likelihood_masks", [])
+    if not isinstance(likelihood_masks, list):
+        raise ConfigError("fit.likelihood_masks must be a list")
+    for index, specification in enumerate(likelihood_masks):
+        where = f"fit.likelihood_masks[{index}]"
+        if isinstance(specification, (list, tuple)):
+            _pair(specification, where)
+            continue
+        if not isinstance(specification, dict):
+            raise ConfigError(f"{where} must be an interval or mapping")
+        _pair(_require(specification, "window", where), f"{where}.window")
+        if "name" in specification and not isinstance(specification["name"], str):
+            raise ConfigError(f"{where}.name must be a string")
+        for key in ("padding_angstrom", "padding_resolution_elements"):
+            try:
+                value = float(specification.get(key, 0.0))
+            except (TypeError, ValueError) as exc:
+                raise ConfigError(f"{where}.{key} must be a non-negative number") from exc
+            if not math.isfinite(value) or value < 0:
+                raise ConfigError(f"{where}.{key} must be a non-negative number")
+
+    component_support = fit.get("component_support", {})
+    if not isinstance(component_support, dict):
+        raise ConfigError("fit.component_support must be a mapping")
+    if not isinstance(component_support.get("enabled", True), bool):
+        raise ConfigError("fit.component_support.enabled must be boolean")
+    if not isinstance(
+        component_support.get("reject_centroid_inside", True), bool
+    ):
+        raise ConfigError(
+            "fit.component_support.reject_centroid_inside must be boolean"
+        )
+    max_masked_fraction = float(
+        component_support.get("max_masked_fraction", 0.5)
+    )
+    if not 0.0 <= max_masked_fraction <= 1.0:
+        raise ConfigError(
+            "fit.component_support.max_masked_fraction must lie between 0 and 1"
+        )
+    for key, default in (
+        ("minimum_centroid_distance_sigma", 0.5),
+        ("coverage_sigma", 2.0),
+    ):
+        value = float(component_support.get(key, default))
+        if not math.isfinite(value) or value < 0:
+            raise ConfigError(f"fit.component_support.{key} must be non-negative")
+    minimum_each_side = component_support.get(
+        "minimum_unmasked_pixels_each_side", 1
+    )
+    if (
+        not isinstance(minimum_each_side, int)
+        or isinstance(minimum_each_side, bool)
+        or minimum_each_side < 0
+    ):
+        raise ConfigError(
+            "fit.component_support.minimum_unmasked_pixels_each_side must be "
+            "a non-negative integer"
+        )
 
     continuum = fit.get("continuum", {})
     degree = continuum.get("degree", 1)
@@ -290,6 +348,12 @@ def validate_config(config: dict[str, Any]) -> None:
             flux_lo, _ = _pair(line["flux_bounds"], f"line {name}.flux_bounds")
             if flux_lo <= 0:
                 raise ConfigError(f"Line {name} flux_bounds must be positive")
+
+    support_line = component_support.get("line")
+    if support_line is not None and support_line not in names:
+        raise ConfigError(
+            "fit.component_support.line must name a configured emission line"
+        )
 
     fixed_names: set[str] = set()
     for index, component in enumerate(fit.get("fixed_components", [])):

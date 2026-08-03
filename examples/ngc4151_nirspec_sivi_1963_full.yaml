@@ -1,0 +1,67 @@
+version: 2
+
+input:
+  adapter: nirspec
+  path: /path/to/ngc4151_nirspec_g235h-f170lp_s3d.fits
+  redshift: 0.003326
+  # Zero-based, half-open bounds for the 49 x 45 Stage-3 cube.
+  x_range: [1, 49]
+  y_range: [1, 45]
+  allow_full_cube: true
+  skip_invalid_spaxels: true
+  min_valid_pixels: 20
+
+fit:
+  frame: rest
+  wavelength_medium: vacuum
+  window: [19200.0, 20050.0]
+  likelihood_masks:
+    - name: left_unmodeled_line
+      # Rest-frame interval corresponding to approximately 19470--19540 A
+      # observed in NGC 4151.
+      window: [19405.0, 19475.0]
+    - name: h2_1_0_s3
+      window: [19545.0, 19605.0]
+      padding_resolution_elements: 2.0
+  component_support:
+    enabled: true
+    line: sivi_1963
+    reject_centroid_inside: true
+    max_masked_fraction: 0.5
+    minimum_centroid_distance_sigma: 0.5
+    coverage_sigma: 2.0
+    # G235H is sampled at about 2.2 pixels per instrumental resolution element.
+    minimum_unmasked_pixels_each_side: 1
+  minimum_valid_pixels: 20
+  continuum:
+    degree: 1
+    windows: [[19200.0, 19400.0], [19800.0, 20050.0]]
+  noise:
+    model: ar1
+    rho: auto
+    marginal_scale: auto
+  kinematics:
+    max_components: 3
+    velocity_kms: [-1000.0, 1000.0]
+    sigma_kms: [1.0, 1000.0]
+  lines:
+    - {name: sivi_1963, wavelength: 19634.1}
+  lsf:
+    model: instrument
+  selection:
+    delta_logz: 5.0
+    stop_when_not_preferred: true
+    audit:
+      mode: flag
+  sampling:
+    seed: 4151
+    min_num_live_points: 150
+    min_ess: 300
+    dlogz: 0.7
+
+output:
+  # A new directory keeps masked results separate from the earlier run.
+  directory: ./beat-output/ngc4151_nirspec_sivi_1963_full_masked
+  resume: true
+  plots: selected
+  workers: 4

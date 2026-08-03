@@ -54,7 +54,21 @@ fixed `redshift` value. `id_header` overrides a filename-derived ID.
 - `frame`: whether `window` and continuum windows are `rest` or `observed`;
 - `window`: two wavelength bounds;
 - `exclude_windows`: optional wavelength intervals, in the configured frame,
-  removed before fitting (useful for known contaminating lines or artifacts);
+  physically removed before fitting. This legacy option also removes the data
+  from diagnostic plots;
+- `likelihood_masks`: optional zero-weight wavelength masks. A mask may be a
+  two-number interval or a mapping with `window`, optional `name`,
+  `padding_angstrom`, and/or `padding_resolution_elements`. Resolution-element
+  padding uses the configured LSF FWHM at each edge. Masked pixels do not enter
+  continuum/noise estimation, chi-square, likelihood normalization, or
+  evidence, but remain visible as red hatched regions in diagnostic plots;
+- `component_support`: optional safeguards for free narrow components near a
+  likelihood mask. `line` selects the line to test (all free lines otherwise),
+  `max_masked_fraction` defaults to 0.5,
+  `minimum_centroid_distance_sigma` defaults to 0.5,
+  `coverage_sigma` defaults to 2.0, and
+  `minimum_unmasked_pixels_each_side` defaults to 1. The safeguards are enabled
+  automatically when `likelihood_masks` are present unless `enabled: false`;
 - `minimum_valid_pixels`: fail a spectrum with fewer valid pixels (default 20);
 - `continuum.degree`: 0, 1, or 2;
 - `continuum.windows`: optional intervals used for initial continuum and noise

@@ -52,7 +52,10 @@ def _validate(args: argparse.Namespace) -> int:
         "first_spectrum_id": first.spectrum_id,
         "redshift": first.redshift,
         "input_pixels": int(first.wavelength.size),
-        "valid_fit_pixels": int(prepared.wavelength.size),
+        "valid_fit_pixels": int((~prepared.likelihood_mask).sum()),
+        "diagnostic_plot_pixels": int(prepared.wavelength.size),
+        "likelihood_masked_pixels": int(prepared.likelihood_mask.sum()),
+        "likelihood_masks": prepared.likelihood_masks,
         "fit_wavelength_angstrom": [
             float(prepared.wavelength.min()),
             float(prepared.wavelength.max()),
