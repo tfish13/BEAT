@@ -78,10 +78,17 @@ atomic checkpoints.
 - `2.0.0`: only after scientific acceptance criteria and regression datasets
   are documented and passing.
 
-Current beta status: MUSE, NIRSpec, and MIRI adapters, Gaussian LSF support,
-the initial injection/recovery report, and tabulated G235H/G395H resolution
-curves are implemented. The corrected MUSE donor grids supersede the original
-contaminated case. NIRSpec's standard core recovers 16/16 counts, and its
-AR(1)-aware residual-noise matrix passes the powered blank/single scope at
-40/40. Powered NIRSpec double/triple recovery, MIRI profile validation, and
-astronomer pilot feedback remain before tagging `2.0.0b1`.
+The scoped alpha gates are complete: powered MUSE red validation, NIRSpec
+count and median-parameter-error gates with G235H reliability restricted to
+the documented effective component S/N>=10 domain, and bounded MIRI
+routing/profile/sampling validation. The original NIRSpec double/triple matrix
+retained three evidence flags; the subsequent boundary study documents scoped
+closure rather than an unrestricted pass. See the
+[alpha-test report](../validation/ALPHA_TEST_REPORT.md), the
+[G235H boundary decision](../validation/NIRSPEC_G235H_WEAK_COMPONENT_BOUNDARY.md),
+and the [bounded MIRI report](../validation/MIRI_BOUNDED_VALIDATION.md).
+
+Version `2.0.0a2` is the frozen July 20, 2026 astronomer-pilot package.
+Before `2.0.0b1`, collect and triage astronomer-pilot feedback, resolve blocking
+or scientifically dangerous findings, and record formal closeout and
+clean-environment checks for the exact release candidate.
