@@ -204,6 +204,11 @@ study, and synthetic 1D operational regression are complete within their
 documented supported domains. Version `2.0.0a2` is the frozen astronomer-pilot
 build; it is not yet a scientifically certified final release.
 
+Pilot-package preparation is complete; astronomer-pilot feedback and beta
+closeout remain pending. Current `main` includes post-freeze changes, including
+[PR #3](https://github.com/tfish13/BEAT/pull/3); its regression checks are
+separate from the frozen instrument-validation results.
+
 The subsequent NGC 2992 audit found that the apparent H-alpha false component
 used a residual donor contaminated by native line wings. Injection utilities
 now reject residual donors whose robust scatter is more than three times their
