@@ -74,6 +74,38 @@ RMS, integrated flux relative to posterior standard deviation, and intrinsic
 width-bound proximity). These fields are flags for review, not rejection
 rules. Duplicate YAML keys are rejected at configuration load time.
 
+An optional independent-seed check is available without changing the selected
+component count:
+
+```yaml
+fit:
+  sampling: {seed: 5728, min_num_live_points: 200, min_ess: 400, dlogz: 0.5}
+  selection:
+    stop_when_not_preferred: false
+    convergence_audit:
+      mode: flag
+      models: [2, 3]
+      repeats: 1  # one additional independent seed per requested count
+      evidence_sigma: 3
+      minimum_logz_difference: 2
+      parameter_sigma: 3
+      velocity_floor_kms: 10
+      width_floor_kms: 10
+      flux_floor_fraction: 0.1
+output:
+  posteriors: all
+```
+
+The audit compares ln Z using the quadrature sum of sampler-reported errors
+and compares velocity/width/line-flux posteriors after uncertainty-aware component
+matching. If either discrepancy exceeds its configured threshold, the
+`convergence_audit` record flags it and `selection_status` becomes
+`convergence_unverified`; `selected_components` is **not** changed. All runs,
+seeds, comparisons, and (when requested) weighted posterior paths are retained.
+`models: selected` or `all` may replace the explicit list. A fixed sampling
+seed is required. This can substantially increase runtime and is intended for
+targeted quality checks, not a default survey-wide setting.
+
 The IC 5063 and NGC 4151 examples request a 5-by-5 region around a provisional
 [Ne V] 14.32 micron window. Both should automatically select segment 3B. The
 rest wavelength and continuum windows remain pilot choices to confirm before

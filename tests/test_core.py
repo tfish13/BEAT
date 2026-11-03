@@ -9,6 +9,7 @@ from unittest.mock import patch
 import numpy as np
 
 from beat.config import ConfigError, load_config, validate_config
+from beat.convergence import compare_independent_models, independent_seed
 from beat.data import linear_wavelength
 from beat.fitting import fit_spectrum, make_diagnostic_plot
 from beat.injection import (
@@ -379,6 +380,26 @@ class WeightedFakeSampler(FakeSampler):
         return result
 
 
+class DriftFakeSampler(FakeSampler):
+    calls = 0
+
+    def run(self, **kwargs):
+        type(self).calls += 1
+        point = self.transform(np.full(len(self.names), 0.5))
+        count = max(
+            (int(name.split(".")[1]) for name in self.names
+             if name.startswith("component.")), default=0,
+        )
+        logz = 10.0 * count
+        if count == 3 and type(self).calls > 4:
+            logz += 25.0
+        return {
+            "logz": logz, "logzerr": 0.5, "ncall": 10,
+            "maximum_likelihood": {"point": point, "logl": self.loglike(point)},
+            "posterior": {"median": point, "stdev": np.ones_like(point) * 0.1},
+        }
+
+
 class AdaptiveFakeSampler(FakeSampler):
     """Return a moderate third component in pilot mode and reject it tightly."""
 
@@ -526,6 +547,68 @@ def sivi_h2_wing_regression() -> tuple[Spectrum, dict]:
 
 
 class FitTests(unittest.TestCase):
+    def test_independent_seed_audit_flags_missed_mode_without_reselection(self) -> None:
+        DriftFakeSampler.calls = 0
+        fit = fit_config(max_components=3)
+        fit["sampling"]["seed"] = 5728
+        fit["selection"]["convergence_audit"] = {
+            "mode": "flag", "models": [3], "repeats": 1,
+        }
+        result = fit_spectrum(blank_spectrum(), fit, sampler_factory=DriftFakeSampler)
+        self.assertEqual(result["selected_components"], 3)
+        self.assertEqual(result["selection_status"], "convergence_unverified")
+        audit = result["convergence_audit"]
+        self.assertTrue(audit["disagreement"])
+        self.assertTrue(audit["comparisons"][0]["evidence_disagreement"])
+        self.assertEqual(
+            audit["runs"][0]["seed"], independent_seed(5728, "synthetic", 3, 1)
+        )
+
+    def test_audit_posteriors_preserve_competing_runs(self) -> None:
+        fit = fit_config(max_components=2)
+        fit["sampling"]["seed"] = 5728
+        fit["selection"]["convergence_audit"] = {
+            "mode": "flag", "models": [1, 2], "repeats": 1,
+        }
+        result = fit_spectrum(
+            blank_spectrum(), fit, sampler_factory=WeightedFakeSampler,
+            capture_posteriors=True,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            _save_posteriors(result, Path(directory), "all")
+            self.assertEqual(len(result["convergence_audit"]["runs"]), 2)
+            for run in result["convergence_audit"]["runs"]:
+                self.assertTrue(Path(run["model"]["posterior_path"]).exists())
+
+    def test_decomposition_audit_matches_by_kinematics_not_label(self) -> None:
+        names = [
+            "component.1.velocity_kms", "component.1.sigma_kms",
+            "component.2.velocity_kms", "component.2.sigma_kms",
+        ]
+        base = {
+            "n_components": 2, "logz": -100.0, "logz_error": 0.5,
+            "parameter_names": names,
+            "posterior_median": [-80.0, 45.0, 80.0, 50.0],
+            "posterior_stdev": [3.0, 4.0, 3.0, 4.0],
+        }
+        alternative = dict(base, posterior_median=[80.0, 50.0, -80.0, 45.0])
+        comparison = compare_independent_models(base, alternative, {})
+        self.assertFalse(comparison["decomposition_disagreement"])
+        shifted = dict(base, posterior_median=[-80.0, 45.0, 180.0, 50.0])
+        self.assertTrue(compare_independent_models(base, shifted, {})["decomposition_disagreement"])
+        with_flux = dict(base)
+        with_flux["parameter_names"] = names + [
+            "component.1.h2.flux", "component.2.h2.flux"
+        ]
+        with_flux["posterior_median"] = base["posterior_median"] + [100.0, 200.0]
+        with_flux["posterior_stdev"] = base["posterior_stdev"] + [2.0, 2.0]
+        changed_flux = dict(with_flux, posterior_median=base["posterior_median"] + [100.0, 300.0])
+        self.assertTrue(
+            compare_independent_models(with_flux, changed_flux, {})[
+                "decomposition_disagreement"
+            ]
+        )
+
     def test_component_quality_is_diagnostic_only(self) -> None:
         fit = fit_config(max_components=2)
         result = fit_spectrum(blank_spectrum(), fit, sampler_factory=FakeSampler)
@@ -874,6 +957,17 @@ class InjectionTests(unittest.TestCase):
 
 
 class ConfigTests(unittest.TestCase):
+    def test_independent_seed_audit_requires_seed(self) -> None:
+        config = {
+            "version": 2,
+            "input": {"kind": "cube", "path": "x", "flux_hdu": 1, "redshift": 0},
+            "fit": fit_config(),
+            "output": {"directory": "x", "plots": "none"},
+        }
+        config["fit"]["selection"]["convergence_audit"] = {"mode": "flag"}
+        with self.assertRaisesRegex(ConfigError, "requires fit.sampling.seed"):
+            validate_config(config)
+
     def test_duplicate_yaml_redshift_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.yaml"

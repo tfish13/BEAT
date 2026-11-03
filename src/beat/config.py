@@ -42,6 +42,7 @@ DEFAULTS: dict[str, Any] = {
         "selection": {
             "delta_logz": 5.0,
             "stop_when_not_preferred": True,
+            "convergence_audit": {"mode": "none"},
             "audit": {
                 "mode": "flag",
                 "uncertainty_sigma": 1.0,
@@ -497,6 +498,33 @@ def validate_config(config: dict[str, Any]) -> None:
         seed = sampling["seed"]
         if not isinstance(seed, int) or isinstance(seed, bool) or seed < 0:
             raise ConfigError("fit.sampling.seed must be a non-negative integer")
+    convergence = selection.get("convergence_audit", {})
+    if not isinstance(convergence, dict):
+        raise ConfigError("fit.selection.convergence_audit must be a mapping")
+    if convergence.get("mode", "none") not in {"none", "flag"}:
+        raise ConfigError("fit.selection.convergence_audit.mode must be none or flag")
+    if convergence.get("mode", "none") == "flag" and sampling.get("seed") is None:
+        raise ConfigError("Independent-seed convergence audit requires fit.sampling.seed")
+    repeats = convergence.get("repeats", 1)
+    if not isinstance(repeats, int) or isinstance(repeats, bool) or repeats < 1:
+        raise ConfigError("fit.selection.convergence_audit.repeats must be a positive integer")
+    models_to_audit = convergence.get("models", "selected")
+    if isinstance(models_to_audit, str):
+        if models_to_audit not in {"selected", "all"}:
+            raise ConfigError("fit.selection.convergence_audit.models must be selected, all, or a list")
+    else:
+        if (not isinstance(models_to_audit, list) or not models_to_audit
+            or any(not isinstance(n, int) or isinstance(n, bool)
+                   or n < 0 or n > max_components for n in models_to_audit)):
+            raise ConfigError("fit.selection.convergence_audit.models contains invalid counts")
+    for key in ("evidence_sigma", "parameter_sigma", "minimum_logz_difference"):
+        if float(convergence.get(key, 2.0 if key == "minimum_logz_difference" else 3.0)) <= 0:
+            raise ConfigError(f"fit.selection.convergence_audit.{key} must be positive")
+    for key in ("velocity_floor_kms", "width_floor_kms"):
+        if float(convergence.get(key, 10.0)) < 0:
+            raise ConfigError(f"fit.selection.convergence_audit.{key} cannot be negative")
+    if float(convergence.get("flux_floor_fraction", 0.1)) < 0:
+        raise ConfigError("fit.selection.convergence_audit.flux_floor_fraction cannot be negative")
     audit_sampling = audit.get("sampling", {})
     if not isinstance(audit_sampling, dict):
         raise ConfigError("fit.selection.audit.sampling must be a mapping")

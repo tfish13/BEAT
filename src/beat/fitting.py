@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 import numpy as np
 
+from .convergence import compare_independent_models, independent_seed
 from .lsf import lsf_sigma_angstrom
 from .model import (
     ModelDefinition, observed_center, observed_interval, observed_sigma,
@@ -429,10 +430,82 @@ def fit_spectrum(
     result["selection_reasons"] = final_assessment["reasons"]
     result["selection_diagnostics"] = final_assessment["comparisons"]
     result["selection_audit"] = audit_record
+    result["convergence_audit"] = _independent_seed_audit(
+        spectrum, fit, result, sampler_factory, capture_posteriors
+    )
+    if result["convergence_audit"]["disagreement"]:
+        result["selection_status"] = "convergence_unverified"
+        result["selection_reasons"].append(
+            "independent seeds disagree on evidence or decomposition"
+        )
     result["component_quality_diagnostics"] = _component_quality_diagnostics(
         spectrum, fit, result
     )
     return result
+
+
+def _independent_seed_audit(
+    spectrum: Spectrum,
+    fit: dict[str, Any],
+    result: dict[str, Any],
+    sampler_factory: SamplerFactory | None,
+    capture_posteriors: bool,
+) -> dict[str, Any]:
+    """Repeat requested counts with independent RNG seeds; never reselect."""
+    settings = fit.get("selection", {}).get("convergence_audit", {})
+    if settings.get("mode", "none") != "flag":
+        return {"mode": "none", "performed": False, "disagreement": False}
+    base_seed = fit.get("sampling", {}).get("seed")
+    if base_seed is None:
+        raise ValueError("Independent-seed audit requires fit.sampling.seed")
+    requested = settings.get("models", "selected")
+    if requested == "selected":
+        counts = [int(result["selected_components"])]
+    elif requested == "all":
+        counts = [int(model["n_components"]) for model in result["models"]]
+    else:
+        counts = [int(n) for n in requested]
+    available = {int(model["n_components"]): model for model in result["models"]}
+    prepared = prepare_spectrum(spectrum, fit)
+    factory = sampler_factory or _default_sampler_factory
+    runs, comparisons = [], []
+    rng_state = np.random.get_state()
+    try:
+        for count in counts:
+            if count not in available:
+                continue
+            sequence = [available[count]]
+            definition = ModelDefinition(prepared, fit, count)
+            for repeat in range(1, int(settings.get("repeats", 1)) + 1):
+                seed = independent_seed(
+                    int(base_seed), spectrum.spectrum_id, count, repeat
+                )
+                np.random.seed(seed)
+                rerun = _run_model(
+                    definition, fit.get("sampling", {}), factory,
+                    capture_posterior=capture_posteriors,
+                )
+                runs.append({
+                    "n_components": count, "repeat": repeat,
+                    "seed": seed, "model": rerun,
+                })
+                sequence.append(rerun)
+            for i in range(len(sequence)):
+                for j in range(i + 1, len(sequence)):
+                    comparison = compare_independent_models(
+                        sequence[i], sequence[j], settings
+                    )
+                    comparison["first_repeat"] = i
+                    comparison["second_repeat"] = j
+                    comparisons.append(comparison)
+    finally:
+        np.random.set_state(rng_state)
+    return {
+        "mode": "flag", "performed": True, "requested_models": requested,
+        "unavailable_models": [count for count in counts if count not in available],
+        "runs": runs, "comparisons": comparisons,
+        "disagreement": any(item["disagreement"] for item in comparisons),
+    }
 
 
 def _component_quality_diagnostics(

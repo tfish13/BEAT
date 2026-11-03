@@ -98,26 +98,40 @@ def _matching_completed(
         models if posteriors == "all" else
         [model for model in models if model["n_components"] == payload["selected_components"]]
     )
+    audit_runs = payload.get("convergence_audit", {}).get("runs", [])
+    required += [
+        run["model"] for run in audit_runs
+        if posteriors == "all" or run["n_components"] == payload["selected_components"]
+    ]
     return bool(required) and all(
         model.get("posterior_path") and Path(model["posterior_path"]).exists()
         for model in required
     )
 
 
-def _posterior_path(directory: Path, identifier: str, count: int) -> Path:
+def _posterior_path(
+    directory: Path, identifier: str, count: int, suffix: str = ""
+) -> Path:
     digest = hashlib.sha1(str(identifier).encode("utf-8")).hexdigest()
-    return directory / digest[:2] / f"{safe_stem(identifier)}-n{count}.npz"
+    return directory / digest[:2] / f"{safe_stem(identifier)}-n{count}{suffix}.npz"
 
 
 def _save_posteriors(result: dict[str, Any], directory: Path, mode: str) -> None:
     """Atomically persist weighted draws without embedding them in JSON."""
     selected = int(result["selected_components"])
-    for model in result["models"]:
+    models = [(model, "") for model in result["models"]]
+    models.extend(
+        (run["model"], f"-audit-r{run['repeat']}")
+        for run in result.get("convergence_audit", {}).get("runs", [])
+    )
+    for model, suffix in models:
         arrays = model.pop("_posterior_arrays", None)
         if arrays is None or (mode == "selected" and model["n_components"] != selected):
             continue
         points, weights = arrays
-        path = _posterior_path(directory, result["spectrum_id"], model["n_components"])
+        path = _posterior_path(
+            directory, result["spectrum_id"], model["n_components"], suffix
+        )
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_name(path.name + f".tmp-{os.getpid()}")
         with temporary.open("wb") as stream:
