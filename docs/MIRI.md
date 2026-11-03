@@ -64,6 +64,16 @@ review or a tabulated/empirical LSF. See
 
 ## Examples
 
+For diagnostic MIRI runs, `output.posteriors: all` saves compressed weighted
+posterior draws for every fitted component count under `posteriors/`, with
+their paths recorded in each result JSON. The default is `none`; `selected`
+saves only the chosen count. These are output controls and do not change the
+likelihood, priors, evidence, or component selection. Each result also reports
+`component_quality_diagnostics` (peak relative to continuum-window residual
+RMS, integrated flux relative to posterior standard deviation, and intrinsic
+width-bound proximity). These fields are flags for review, not rejection
+rules. Duplicate YAML keys are rejected at configuration load time.
+
 The IC 5063 and NGC 4151 examples request a 5-by-5 region around a provisional
 [Ne V] 14.32 micron window. Both should automatically select segment 3B. The
 rest wavelength and continuum windows remain pilot choices to confirm before

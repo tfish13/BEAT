@@ -28,6 +28,7 @@ DEFAULTS: dict[str, Any] = {
         "directory": "beat_output",
         "resume": True,
         "plots": "selected",  # none, selected, all
+        "posteriors": "none",  # none, selected, all
     },
     "fit": {
         "frame": "rest",
@@ -93,7 +94,25 @@ def load_config(path: str | Path) -> dict[str, Any]:
             import yaml
         except ImportError as exc:  # pragma: no cover - installation error
             raise ConfigError("PyYAML is required to read YAML configurations") from exc
-        raw = yaml.safe_load(text)
+        class UniqueKeyLoader(yaml.SafeLoader):
+            """Reject ambiguous configuration mappings before fitting."""
+
+        def unique_mapping(loader: Any, node: Any) -> dict[str, Any]:
+            result: dict[str, Any] = {}
+            for key_node, value_node in node.value:
+                key = loader.construct_object(key_node, deep=True)
+                if key in result:
+                    raise ConfigError(
+                        f"Duplicate YAML key {key!r} at line "
+                        f"{key_node.start_mark.line + 1} in {config_path}"
+                    )
+                result[key] = loader.construct_object(value_node, deep=True)
+            return result
+
+        UniqueKeyLoader.add_constructor(
+            yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, unique_mapping
+        )
+        raw = yaml.load(text, Loader=UniqueKeyLoader)
 
     if not isinstance(raw, dict):
         raise ConfigError("The top level of the configuration must be a mapping")
@@ -502,6 +521,8 @@ def validate_config(config: dict[str, Any]) -> None:
     output = config.get("output", {})
     if output.get("plots", "selected") not in {"none", "selected", "all"}:
         raise ConfigError("output.plots must be none, selected, or all")
+    if output.get("posteriors", "none") not in {"none", "selected", "all"}:
+        raise ConfigError("output.posteriors must be none, selected, or all")
 
 
 def public_config(config: dict[str, Any]) -> dict[str, Any]:

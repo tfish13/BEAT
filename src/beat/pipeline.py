@@ -78,14 +78,57 @@ def _result_path(results_dir: Path, identifier: str) -> Path:
     return results_dir / digest[:2] / f"{safe_stem(identifier)}.json"
 
 
-def _matching_completed(path: Path, fingerprint: str) -> bool:
+def _matching_completed(
+    path: Path, fingerprint: str, posteriors: str = "none"
+) -> bool:
     if not path.exists():
         return False
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False
-    return payload.get("config_hash") == fingerprint and payload.get("status") == "ok"
+    if payload.get("config_hash") != fingerprint or payload.get("status") != "ok":
+        return False
+    if posteriors == "none":
+        return True
+    if payload.get("posteriors_mode") != posteriors:
+        return False
+    models = payload.get("models", [])
+    required = (
+        models if posteriors == "all" else
+        [model for model in models if model["n_components"] == payload["selected_components"]]
+    )
+    return bool(required) and all(
+        model.get("posterior_path") and Path(model["posterior_path"]).exists()
+        for model in required
+    )
+
+
+def _posterior_path(directory: Path, identifier: str, count: int) -> Path:
+    digest = hashlib.sha1(str(identifier).encode("utf-8")).hexdigest()
+    return directory / digest[:2] / f"{safe_stem(identifier)}-n{count}.npz"
+
+
+def _save_posteriors(result: dict[str, Any], directory: Path, mode: str) -> None:
+    """Atomically persist weighted draws without embedding them in JSON."""
+    selected = int(result["selected_components"])
+    for model in result["models"]:
+        arrays = model.pop("_posterior_arrays", None)
+        if arrays is None or (mode == "selected" and model["n_components"] != selected):
+            continue
+        points, weights = arrays
+        path = _posterior_path(directory, result["spectrum_id"], model["n_components"])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(path.name + f".tmp-{os.getpid()}")
+        with temporary.open("wb") as stream:
+            np.savez_compressed(
+                stream, points=points, weights=weights,
+                parameter_names=np.asarray(model["parameter_names"]),
+                logz=np.asarray(model["logz"]),
+            )
+        os.replace(temporary, path)
+        model["posterior_path"] = str(path)
+        model["posterior_draws"] = int(len(points))
 
 
 def _worker(
@@ -93,12 +136,16 @@ def _worker(
     fit: dict[str, Any],
     plots: str,
     plots_dir: str,
+    posteriors: str = "none",
+    posteriors_dir: str | None = None,
 ) -> dict[str, Any]:
     seed = spectrum_seed(spectrum.spectrum_id, fit)
     if seed is not None:
         np.random.seed(seed)
     try:
-        result = fit_spectrum(spectrum, fit)
+        result = fit_spectrum(
+            spectrum, fit, capture_posteriors=posteriors != "none"
+        )
         result["sampler_seed"] = seed
         if plots == "selected":
             plot_path = Path(plots_dir) / f"{safe_stem(spectrum.spectrum_id)}.png"
@@ -117,6 +164,10 @@ def _worker(
                 )
                 paths.append(str(plot_path))
             result["plots"] = paths
+        if posteriors != "none":
+            assert posteriors_dir is not None
+            _save_posteriors(result, Path(posteriors_dir), posteriors)
+        result["posteriors_mode"] = posteriors
         return result
     except Exception as exc:  # return failures to the parent process
         return {
@@ -375,6 +426,7 @@ def run_pipeline(config: dict[str, Any], workers: int | None = None) -> dict[str
     output_dir = Path(output_config["directory"])
     results_dir = output_dir / "results"
     plots_dir = output_dir / "plots"
+    posteriors_dir = output_dir / "posteriors"
     failure_details_dir = output_dir / "failure_details"
     results_dir.mkdir(parents=True, exist_ok=True)
     plots_dir.mkdir(parents=True, exist_ok=True)
@@ -397,12 +449,14 @@ def run_pipeline(config: dict[str, Any], workers: int | None = None) -> dict[str
             "workers": workers,
             "resume": bool(output_config.get("resume", True)),
             "plots": output_config.get("plots", "selected"),
+            "posteriors": output_config.get("posteriors", "none"),
         },
     }
     _atomic_json(output_dir / "run_manifest.json", manifest)
 
     resume = bool(output_config.get("resume", True))
     plots = output_config.get("plots", "selected")
+    posteriors = output_config.get("posteriors", "none")
     progress_every = max(1, int(output_config.get("progress_every", 10)))
     completed = 0
     failed = 0
@@ -413,7 +467,7 @@ def run_pipeline(config: dict[str, Any], workers: int | None = None) -> dict[str
 
     def should_skip(spectrum: Spectrum) -> bool:
         return resume and _matching_completed(
-            _result_path(results_dir, spectrum.spectrum_id), fingerprint
+            _result_path(results_dir, spectrum.spectrum_id), fingerprint, posteriors
         )
 
     if workers == 1:
@@ -422,7 +476,10 @@ def run_pipeline(config: dict[str, Any], workers: int | None = None) -> dict[str
             if should_skip(spectrum):
                 resumed += 1
                 continue
-            result = _worker(spectrum, config["fit"], plots, str(plots_dir))
+            worker_args = (spectrum, config["fit"], plots, str(plots_dir))
+            if posteriors != "none":
+                worker_args += (posteriors, str(posteriors_dir))
+            result = _worker(*worker_args)
             _persist_result(result, output_dir, fingerprint)
             if result.get("status") == "ok":
                 completed += 1
@@ -444,9 +501,10 @@ def run_pipeline(config: dict[str, Any], workers: int | None = None) -> dict[str
                 if should_skip(spectrum):
                     resumed += 1
                     continue
-                future = executor.submit(
-                    _worker, spectrum, config["fit"], plots, str(plots_dir)
-                )
+                worker_args = (spectrum, config["fit"], plots, str(plots_dir))
+                if posteriors != "none":
+                    worker_args += (posteriors, str(posteriors_dir))
+                future = executor.submit(_worker, *worker_args)
                 pending[future] = spectrum.spectrum_id
                 return True
             exhausted = True

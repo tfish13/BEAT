@@ -9,7 +9,10 @@ from typing import Any, Callable
 import numpy as np
 
 from .lsf import lsf_sigma_angstrom
-from .model import ModelDefinition, observed_center, observed_sigma, prepare_spectrum
+from .model import (
+    ModelDefinition, observed_center, observed_interval, observed_sigma,
+    prepare_spectrum, robust_sigma,
+)
 from .spectrum import Spectrum
 
 
@@ -56,6 +59,7 @@ def _run_model(
     model: ModelDefinition,
     sampling: dict[str, Any],
     sampler_factory: SamplerFactory,
+    capture_posterior: bool = False,
 ) -> dict[str, Any]:
     sampler = sampler_factory(
         model.parameter_names, model.log_likelihood, model.prior_transform
@@ -75,7 +79,7 @@ def _run_model(
     median = _result_value(result, "posterior", "median", maximum)
     stdev = _result_value(result, "posterior", "stdev", np.full(model.ndim, np.nan))
     support = model.component_support_diagnostics(maximum)
-    return {
+    summary = {
         "n_components": model.n_components,
         "logz": float(result["logz"]),
         "logz_error": float(result.get("logzerr", np.nan)),
@@ -89,12 +93,20 @@ def _run_model(
         "ncall": int(result.get("ncall", 0)),
         "component_support": support,
     }
+    if capture_posterior:
+        weighted = result.get("weighted_samples", {})
+        points = np.asarray(weighted.get("points", []), dtype=float)
+        weights = np.asarray(weighted.get("weights", []), dtype=float)
+        if points.ndim == 2 and points.shape[1] == model.ndim and weights.shape == (len(points),):
+            summary["_posterior_arrays"] = (points, weights)
+    return summary
 
 
 def _fit_spectrum_once(
     spectrum: Spectrum,
     fit: dict[str, Any],
     sampler_factory: SamplerFactory | None = None,
+    capture_posteriors: bool = False,
 ) -> dict[str, Any]:
     """Fit zero through N narrow components once and select by evidence."""
     prepared = prepare_spectrum(spectrum, fit)
@@ -109,7 +121,7 @@ def _fit_spectrum_once(
 
     for n_components in range(max_components + 1):
         model = ModelDefinition(prepared, fit, n_components)
-        model_result = _run_model(model, sampling, factory)
+        model_result = _run_model(model, sampling, factory, capture_posteriors)
         models.append(model_result)
         if n_components == 0:
             continue
@@ -365,12 +377,16 @@ def fit_spectrum(
     spectrum: Spectrum,
     fit: dict[str, Any],
     sampler_factory: SamplerFactory | None = None,
+    capture_posteriors: bool = False,
 ) -> dict[str, Any]:
     """Fit a spectrum, assess evidence reliability, and optionally audit it."""
     selection = fit.get("selection", {})
     audit = selection.get("audit", {})
     mode = audit.get("mode", "flag")
-    pilot = _fit_spectrum_once(spectrum, fit, sampler_factory=sampler_factory)
+    pilot = _fit_spectrum_once(
+        spectrum, fit, sampler_factory=sampler_factory,
+        capture_posteriors=capture_posteriors,
+    )
     pilot_assessment = _selection_assessment(pilot, selection, audited=False)
     result = pilot
     audit_record: dict[str, Any] = {
@@ -385,7 +401,8 @@ def fit_spectrum(
             fit.get("sampling", {}), audit.get("sampling", {})
         )
         result = _fit_spectrum_once(
-            spectrum, audited_fit, sampler_factory=sampler_factory
+            spectrum, audited_fit, sampler_factory=sampler_factory,
+            capture_posteriors=capture_posteriors,
         )
         final_assessment = _selection_assessment(result, selection, audited=True)
         audit_record.update(
@@ -393,7 +410,11 @@ def fit_spectrum(
                 "performed": True,
                 "pilot_selected_components": pilot["selected_components"],
                 "pilot_selected_logz": pilot["selected_logz"],
-                "pilot_models": pilot["models"],
+                "pilot_models": [
+                    {key: value for key, value in model.items()
+                     if key != "_posterior_arrays"}
+                    for model in pilot["models"]
+                ],
                 "pilot_selection_diagnostics": pilot_assessment["comparisons"],
                 "pilot_sampling": copy.deepcopy(fit.get("sampling", {})),
                 "audit_sampling": copy.deepcopy(audited_fit["sampling"]),
@@ -408,7 +429,81 @@ def fit_spectrum(
     result["selection_reasons"] = final_assessment["reasons"]
     result["selection_diagnostics"] = final_assessment["comparisons"]
     result["selection_audit"] = audit_record
+    result["component_quality_diagnostics"] = _component_quality_diagnostics(
+        spectrum, fit, result
+    )
     return result
+
+
+def _component_quality_diagnostics(
+    spectrum: Spectrum, fit: dict[str, Any], result: dict[str, Any]
+) -> dict[str, Any]:
+    """Describe selected components without altering evidence or selection."""
+    prepared = prepare_spectrum(spectrum, fit)
+    chosen = selected_model(result)
+    definition = ModelDefinition(prepared, fit, int(chosen["n_components"]))
+    parameters = np.asarray(chosen["maximum_likelihood"], dtype=float)
+    residual = prepared.flux - definition.evaluate(parameters)
+    windows = fit.get("continuum", {}).get("windows", [])
+    if windows:
+        sideband = np.zeros(prepared.wavelength.size, dtype=bool)
+        for window in windows:
+            lo, hi = observed_interval(
+                window, fit.get("frame", "rest"), prepared.spectrum.redshift
+            )
+            sideband |= (prepared.wavelength >= lo) & (prepared.wavelength <= hi)
+        basis = "configured_continuum_windows"
+    else:
+        sideband = np.ones(prepared.wavelength.size, dtype=bool)
+        basis = "all_fit_residuals"
+    sideband &= ~prepared.likelihood_mask
+    local_rms = robust_sigma(residual[sideband])
+    if not np.isfinite(local_rms) or local_rms <= 0:
+        local_rms = float(np.std(residual[sideband]))
+    if not np.isfinite(local_rms) or local_rms <= 0:
+        local_rms = float(prepared.noise_level)
+
+    lower, upper = map(float, fit["kinematics"]["sigma_kms"])
+    stdevs = dict(zip(chosen["parameter_names"], chosen["posterior_stdev"]))
+    entries = []
+    for component in result.get("components", []):
+        number = int(component["component"])
+        sigma = float(component["sigma_kms"])
+        sigma_error = float(stdevs.get(f"component.{number}.sigma_kms", np.nan))
+        lower_distance = sigma - lower
+        upper_distance = upper - sigma
+        line_entries = {}
+        for name, line in component["lines"].items():
+            width = float(line["convolved_sigma_angstrom"])
+            peak = float(line["flux"]) / (np.sqrt(2 * np.pi) * width)
+            flux_error = float(line["flux_stdev"])
+            line_entries[name] = {
+                "peak_amplitude": peak,
+                "peak_over_continuum_residual_rms": peak / local_rms,
+                "integrated_flux_over_posterior_stdev": (
+                    float(line["flux"]) / flux_error
+                    if np.isfinite(flux_error) and flux_error > 0 else None
+                ),
+            }
+        entries.append({
+            "component": number,
+            "velocity_kms": float(component["velocity_kms"]),
+            "intrinsic_sigma_kms": sigma,
+            "intrinsic_sigma_posterior_stdev_kms": sigma_error,
+            "distance_from_lower_width_bound_kms": lower_distance,
+            "distance_from_upper_width_bound_kms": upper_distance,
+            "width_bound_within_one_posterior_stdev": bool(
+                np.isfinite(sigma_error) and sigma_error > 0
+                and min(lower_distance, upper_distance) <= sigma_error
+            ),
+            "lines": line_entries,
+        })
+    return {
+        "continuum_residual_rms": local_rms,
+        "continuum_residual_rms_basis": basis,
+        "continuum_residual_pixels": int(sideband.sum()),
+        "components": entries,
+    }
 
 
 def selected_model(result: dict[str, Any]) -> dict[str, Any]:

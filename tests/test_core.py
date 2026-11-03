@@ -27,7 +27,7 @@ from beat.model import (
     prepare_spectrum,
     relativistic_doppler,
 )
-from beat.pipeline import run_pipeline
+from beat.pipeline import _matching_completed, _save_posteriors, run_pipeline
 from beat.spectrum import Spectrum
 
 
@@ -368,6 +368,17 @@ class FakeSampler:
         }
 
 
+class WeightedFakeSampler(FakeSampler):
+    def run(self, **kwargs):
+        result = super().run(**kwargs)
+        point = np.asarray(result["posterior"]["median"])
+        result["weighted_samples"] = {
+            "points": np.vstack([point, point]),
+            "weights": np.array([0.4, 0.6]),
+        }
+        return result
+
+
 class AdaptiveFakeSampler(FakeSampler):
     """Return a moderate third component in pilot mode and reject it tightly."""
 
@@ -515,6 +526,32 @@ def sivi_h2_wing_regression() -> tuple[Spectrum, dict]:
 
 
 class FitTests(unittest.TestCase):
+    def test_component_quality_is_diagnostic_only(self) -> None:
+        fit = fit_config(max_components=2)
+        result = fit_spectrum(blank_spectrum(), fit, sampler_factory=FakeSampler)
+        self.assertEqual(result["selected_components"], 1)
+        quality = result["component_quality_diagnostics"]
+        self.assertEqual(quality["continuum_residual_rms_basis"],
+                         "configured_continuum_windows")
+        self.assertEqual(len(quality["components"]), 1)
+        self.assertIn("peak_over_continuum_residual_rms",
+                      quality["components"][0]["lines"]["oiii5007"])
+
+    def test_weighted_posteriors_saved_for_competing_models(self) -> None:
+        fit = fit_config(max_components=2)
+        result = fit_spectrum(
+            blank_spectrum(), fit, sampler_factory=WeightedFakeSampler,
+            capture_posteriors=True,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            _save_posteriors(result, Path(directory), "all")
+            self.assertEqual(len(result["models"]), 3)
+            for model in result["models"]:
+                self.assertNotIn("_posterior_arrays", model)
+                saved = np.load(model["posterior_path"])
+                self.assertEqual(saved["points"].shape[0], 2)
+                np.testing.assert_allclose(saved["weights"], [0.4, 0.6])
+
     def test_masked_pixel_values_do_not_change_evidence_input(self) -> None:
         class LikelihoodProbeSampler:
             def __init__(self, names, loglike, transform):
@@ -837,6 +874,16 @@ class InjectionTests(unittest.TestCase):
 
 
 class ConfigTests(unittest.TestCase):
+    def test_duplicate_yaml_redshift_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.yaml"
+            path.write_text(
+                "version: 2\ninput:\n  kind: cube\n  redshift: 0.003326\n"
+                "  redshift: 0.00932\n", encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ConfigError, "Duplicate YAML key 'redshift'"):
+                load_config(path)
+
     def test_json_config_resolves_relative_paths(self) -> None:
         raw = {
             "version": 2,
