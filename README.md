@@ -28,6 +28,7 @@ git clone https://github.com/tfish13/BEAT.git
 cd BEAT
 python3 -m venv .venv
 source .venv/bin/activate
+python -m pip install --upgrade pip setuptools wheel
 python -m pip install -e .
 beat --version
 python demo/generate_demo.py
@@ -42,6 +43,7 @@ git clone https://github.com/tfish13/BEAT.git
 cd BEAT
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip setuptools wheel
 python -m pip install -e .
 beat --version
 python demo/generate_demo.py
