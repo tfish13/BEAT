@@ -247,7 +247,10 @@ class ModelTests(unittest.TestCase):
         # continuum, velocity, sigma, H-beta flux, [O III] 5007 flux
         params = np.array([0.0, 0.0, 100.0, 100.0, 300.0])
         profile = model.evaluate(params)
-        integrated = np.trapz(profile, prepared.wavelength)
+        # NumPy 2.4 removed trapz; keep this test compatible with NumPy 1.x.
+        integrated = np.sum(
+            0.5 * (profile[:-1] + profile[1:]) * np.diff(prepared.wavelength)
+        )
         self.assertAlmostEqual(integrated, 500.0, places=4)
 
     def test_prior_orders_component_velocities(self) -> None:

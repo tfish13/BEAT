@@ -8,5 +8,7 @@ build/
 outputs/
 results/
 plots/
+demo/demo_spectrum.txt
+demo/beat_demo_output/
 validation/*/results/
 

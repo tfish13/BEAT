@@ -30,7 +30,9 @@ fit:
   selection:
     delta_logz: 5.0
     audit: {mode: flag}
+  # Tutorial-only sampling profile: quick, repeatable install check, not science defaults.
   sampling:
+    seed: 20261110
     min_num_live_points: 80
     min_ess: 100
     dlogz: 1.0

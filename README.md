@@ -15,24 +15,55 @@ The package is a development foundation for validation before a public
 astronomy release. It should not yet be treated as a scientifically certified
 release; see [the audit and validation roadmap](docs/V1_AUDIT_AND_ROADMAP.md).
 
-## Install and run
+## Install and try the small demo
 
-Use Python 3.9 or newer in a virtual environment:
+BEAT requires Python 3.9 or newer; Python 3.11 is recommended for the
+workshop. The commands below start in the directory where you want the
+repository. An internet connection is needed for the Python dependencies.
+
+macOS/Linux:
 
 ```bash
-python -m venv .venv
+git clone https://github.com/tfish13/BEAT.git
+cd BEAT
+python3 -m venv .venv
 source .venv/bin/activate
+python -m pip install --upgrade pip setuptools wheel
 python -m pip install -e .
-beat validate examples/cube.yaml
-beat run examples/cube.yaml --workers 4
+beat --version
+python demo/generate_demo.py
+beat validate demo/demo.yaml
+beat run demo/demo.yaml
 ```
 
-`beat validate` opens the first spectrum, applies the fit window, checks its
-uncertainties, and reports the automatically scaled flux prior. Run it before
-every new dataset. `--config-only` validates without opening the input file.
+Windows PowerShell:
 
-Copy the nearest configuration in [`examples/`](examples/) and edit it; users
-do not edit Python code.
+```powershell
+git clone https://github.com/tfish13/BEAT.git
+cd BEAT
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -e .
+beat --version
+python demo/generate_demo.py
+beat validate demo/demo.yaml
+beat run demo/demo.yaml
+```
+
+Run these from the repository root. The generator creates
+`demo/demo_spectrum.txt`; the example configuration resolves that input and
+its output directory relative to `demo/demo.yaml`. A successful run writes
+`demo/beat_demo_output/` with `catalog.csv`, `run_manifest.json`, a result JSON
+under `results/`, and a diagnostic PNG under `plots/`. The demo's reduced
+sampler settings are for a quick installation check, **not** production science.
+
+For a first real-data exercise, see the
+[ESAC workshop quick-start](docs/WORKSHOP_QUICKSTART.md). Copy a relevant
+configuration from [`examples/`](examples/) or use a supplied working YAML;
+there is no `examples/cube.yaml`. `beat validate` checks the first spectrum,
+fit window, uncertainties, and flux prior before fitting. `--config-only`
+checks the configuration without opening the input file.
 
 ## Scientific model
 
@@ -46,7 +77,7 @@ For every target or spaxel, BEAT tries models containing 0 through
 Centroids and widths are transformed to observed Angstrom independently for
 each line using the spectrum's redshift. A polynomial continuum of degree 0,
 1, or 2 is fit simultaneously and is present in every compared model. The
-The default likelihood assumes independent Gaussian pixel uncertainties.
+default likelihood assumes independent Gaussian pixel uncertainties.
 For correlated products, an opt-in AR(1) residual-noise model and an
 inflation-only empirical marginal-error calibration are available through the
 configuration schema.
