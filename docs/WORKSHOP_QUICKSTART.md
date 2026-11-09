@@ -100,6 +100,10 @@ review; a neighboring spaxel need not have the same component count. See
 
 - `beat: command not found`: activate `.venv`, then check `python -m pip show
   beat-astro` and rerun `python -m pip install -e .` from the repository root.
+- `pip install -e .` says editable installs require `setup.py` or `setup.cfg`
+  despite finding `pyproject.toml`: the virtual environment has an older `pip`.
+  Run `python -m pip install --upgrade pip setuptools wheel` with `.venv`
+  active, then retry `python -m pip install -e .`. Do not add a `setup.py`.
 - PowerShell blocks `Activate.ps1`: in that PowerShell window, run
   `Set-ExecutionPolicy -Scope Process RemoteSigned`, then activate again.
 - `pip install -e .` fails while compiling UltraNest: a native compiler may be
