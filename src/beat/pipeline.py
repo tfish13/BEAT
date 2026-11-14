@@ -186,6 +186,9 @@ def flatten_result(result: dict[str, Any]) -> dict[str, Any]:
                 "intrinsic_sigma_angstrom",
                 "lsf_sigma_angstrom",
                 "convolved_sigma_angstrom",
+                "observed_frequency_ghz",
+                "flux_jy_beam_kms",
+                "flux_jy_beam_kms_stdev",
             ):
                 if field in values:
                     row[f"{line_prefix}.{field}"] = values[field]

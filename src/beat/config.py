@@ -18,6 +18,53 @@ from .adapters import AdapterError, apply_adapter_defaults
 from .lsf import LSFError, validate_lsf_config
 
 
+C_ANGSTROM_HZ = 2.99792458e18
+
+
+def _alma_frequency_config(config: dict[str, Any]) -> None:
+    """Translate user-facing GHz line/window settings to the internal vacuum Å axis."""
+    if config.get("input", {}).get("adapter") != "alma":
+        return
+    fit = config.setdefault("fit", {})
+    fit.setdefault("frame", "observed")
+    if fit.get("frame") != "observed":
+        raise ConfigError("ALMA frequency windows require fit.frame: observed")
+
+    def interval(values: Any, where: str) -> list[float]:
+        lo, hi = _pair(values, where)
+        if lo <= 0:
+            raise ConfigError(f"{where} must contain positive GHz frequencies")
+        return [C_ANGSTROM_HZ / (hi * 1.0e9), C_ANGSTROM_HZ / (lo * 1.0e9)]
+
+    if "frequency_window_ghz" in fit:
+        if "window" in fit:
+            raise ConfigError("Specify either fit.window or fit.frequency_window_ghz, not both")
+        fit["window"] = interval(fit["frequency_window_ghz"], "fit.frequency_window_ghz")
+    if "exclude_frequency_windows_ghz" in fit:
+        if "exclude_windows" in fit:
+            raise ConfigError("Specify only one type of fit.exclude_windows")
+        fit["exclude_windows"] = [
+            interval(item, f"fit.exclude_frequency_windows_ghz[{index}]")
+            for index, item in enumerate(fit["exclude_frequency_windows_ghz"])
+        ]
+    continuum = fit.get("continuum", {})
+    if "frequency_windows_ghz" in continuum:
+        if "windows" in continuum:
+            raise ConfigError("Specify only one type of fit.continuum.windows")
+        continuum["windows"] = [
+            interval(item, f"fit.continuum.frequency_windows_ghz[{index}]")
+            for index, item in enumerate(continuum["frequency_windows_ghz"])
+        ]
+    for index, line in enumerate(fit.get("lines", [])):
+        if "rest_frequency_ghz" in line:
+            if "wavelength" in line:
+                raise ConfigError(f"fit.lines[{index}] cannot specify both wavelength and rest_frequency_ghz")
+            frequency = float(line["rest_frequency_ghz"])
+            if not math.isfinite(frequency) or frequency <= 0:
+                raise ConfigError(f"fit.lines[{index}].rest_frequency_ghz must be positive")
+            line["wavelength"] = C_ANGSTROM_HZ / (frequency * 1.0e9)
+
+
 class ConfigError(ValueError):
     """Raised when a BEAT configuration is internally inconsistent."""
 
@@ -98,6 +145,10 @@ def load_config(path: str | Path) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise ConfigError("The top level of the configuration must be a mapping")
 
+    raw_input = raw.get("input")
+    if isinstance(raw_input, dict) and str(raw_input.get("adapter", "")).lower() == "alma":
+        raw.setdefault("fit", {}).setdefault("frame", "observed")
+
     config = _deep_merge(DEFAULTS, raw)
     config["_config_path"] = str(config_path)
     config["_config_dir"] = str(config_path.parent)
@@ -105,6 +156,7 @@ def load_config(path: str | Path) -> dict[str, Any]:
         apply_adapter_defaults(config)
     except AdapterError as exc:
         raise ConfigError(str(exc)) from exc
+    _alma_frequency_config(config)
     _resolve_paths(config, config_path.parent)
     validate_config(config)
     return config
@@ -187,7 +239,7 @@ def validate_config(config: dict[str, Any]) -> None:
         if not math.isfinite(redshift) or redshift <= -1:
             raise ConfigError("input.redshift must be finite and greater than -1")
     adapter = source.get("adapter")
-    if adapter in {"miri", "muse", "nirspec"} and not source.get("allow_full_cube", False):
+    if adapter in {"alma", "miri", "muse", "nirspec"} and not source.get("allow_full_cube", False):
         if source.get("x_range") is None or source.get("y_range") is None:
             raise ConfigError(
                 f"{adapter.upper()} runs require both input.x_range and input.y_range; set "
@@ -212,6 +264,8 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ConfigError("JWST/NIRSpec cubes require fit.wavelength_medium: vacuum")
     if adapter == "miri" and wavelength_medium != "vacuum":
         raise ConfigError("JWST/MIRI cubes require fit.wavelength_medium: vacuum")
+    if adapter == "alma" and wavelength_medium not in {None, "vacuum"}:
+        raise ConfigError("ALMA frequency cubes use vacuum wavelength internally")
     _pair(_require(fit, "window", "fit"), "fit.window")
     for index, window in enumerate(fit.get("exclude_windows", [])):
         _pair(window, f"fit.exclude_windows[{index}]")

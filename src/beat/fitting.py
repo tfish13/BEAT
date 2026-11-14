@@ -9,7 +9,7 @@ from typing import Any, Callable
 import numpy as np
 
 from .lsf import lsf_sigma_angstrom
-from .model import ModelDefinition, observed_center, observed_sigma, prepare_spectrum
+from .model import C_KMS, ModelDefinition, observed_center, observed_sigma, prepare_spectrum
 from .spectrum import Spectrum
 
 
@@ -199,6 +199,16 @@ def _fit_spectrum_once(
                 # Compatibility alias for 2.0.0a1 result readers.
                 "observed_sigma_angstrom": total_sigma,
             }
+            if prepared.spectrum.metadata.get("adapter") == "alma":
+                # Fitted flux integrates Jy/beam over vacuum Å. For a narrow
+                # line use the ALMA radio convention v=c(1-nu/nu_rest), hence
+                # |dv/dlambda|=c*lambda_rest/lambda_observed**2.
+                conversion = C_KMS * rest / center**2
+                line_summaries[line["name"]].update(
+                    observed_frequency_ghz=2.99792458e9 / center,
+                    flux_jy_beam_kms=flux * conversion,
+                    flux_jy_beam_kms_stdev=flux_stdev * conversion,
+                )
         derived_components.append(
             {
                 "component": component_number,
@@ -498,7 +508,8 @@ def make_diagnostic_plot(
             alpha=0.12,
             hatch="//",
         )
-    ax.set_ylabel("Flux density")
+    alma = spectrum.metadata.get("adapter") == "alma"
+    ax.set_ylabel("Flux density (Jy/beam)" if alma else "Flux density")
     ax.set_title(
         f"{spectrum.spectrum_id}: {n_components} component(s), "
         f"ln Z={model_result['logz']:.2f}"
@@ -516,6 +527,15 @@ def make_diagnostic_plot(
         step="mid",
     )
     residual_ax.set_xlabel(r"Observed wavelength ($\AA$)")
+    if alma:
+        def wavelength_to_ghz(value):
+            value = np.asarray(value, dtype=float)
+            return np.divide(2.99792458e9, value, out=np.full_like(value, np.nan), where=value != 0)
+
+        frequency_axis = ax.secondary_xaxis(
+            "top", functions=(wavelength_to_ghz, wavelength_to_ghz)
+        )
+        frequency_axis.set_xlabel("Observed frequency (GHz; LSRK if cube is LSRK)")
     residual_ax.set_ylabel("Residual")
     fig.tight_layout()
     output_path = Path(output_path)
