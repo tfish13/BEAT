@@ -9,7 +9,7 @@ class AdapterError(ValueError):
     """Raised when a file does not match its declared instrument adapter."""
 
 
-SUPPORTED_ADAPTERS = {"miri", "muse", "nirspec"}
+SUPPORTED_ADAPTERS = {"alma", "miri", "muse", "nirspec"}
 
 
 NIRSPEC_ETC_LSF = {
@@ -75,7 +75,23 @@ def apply_adapter_defaults(config: dict[str, Any]) -> None:
             + ", ".join(sorted(SUPPORTED_ADAPTERS))
         )
 
-    if adapter == "muse":
+    if adapter == "alma":
+        defaults = {
+            "kind": "cube",
+            "flux_hdu": 0,
+            "spectral_axis": 0,
+            "frequency_header_hdu": 0,
+            "frequency_unit": "hz",
+            "target_header_hdu": 0,
+            "target_header": "OBJECT",
+            "skip_invalid_spaxels": True,
+        }
+        for key, value in defaults.items():
+            source.setdefault(key, value)
+        # An image cube does not, by itself, specify its effective spectral
+        # response (e.g. Hanning smoothing). Do not invent an ALMA LSF.
+        config.setdefault("fit", {}).setdefault("lsf", {"model": "none"})
+    elif adapter == "muse":
         defaults = {
             "kind": "cube",
             "flux_hdu": "DATA",
@@ -370,10 +386,55 @@ def inspect_miri_hdul(hdul: Any, source: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def inspect_alma_hdul(hdul: Any, source: dict[str, Any]) -> dict[str, Any]:
+    """Validate a standard ALMA frequency cube with an optional singleton Stokes axis."""
+    primary = hdul[0].header
+    science = hdul[source["flux_hdu"]]
+    header = science.header
+    if str(primary.get("TELESCOP", "")).strip().upper() != "ALMA":
+        raise AdapterError("ALMA adapter requires TELESCOP='ALMA'")
+    if science.data is None or science.data.ndim not in {3, 4}:
+        raise AdapterError("ALMA science image must be 3-D or 4-D")
+    if science.data.ndim == 4 and (
+        science.data.shape[0] != 1
+        or str(header.get("CTYPE4", "")).strip().upper() != "STOKES"
+    ):
+        raise AdapterError("4-D ALMA cubes require a singleton STOKES fourth axis")
+    if str(header.get("CTYPE3", "")).strip().upper() != "FREQ":
+        raise AdapterError("ALMA adapter requires CTYPE3='FREQ'")
+    if str(header.get("CUNIT3", "")).strip().lower() != "hz":
+        raise AdapterError("ALMA frequency axis must have CUNIT3='Hz'")
+    if str(source.get("frequency_unit", "hz")).lower() != "hz":
+        raise AdapterError("This ALMA adapter reads a Hz WCS; input.frequency_unit must be hz")
+    if str(header.get("BUNIT", "")).strip().lower() != "jy/beam":
+        raise AdapterError("ALMA adapter currently requires BUNIT='Jy/beam'")
+    rest_frequency = primary.get("RESTFRQ", primary.get("RESTFREQ"))
+    if rest_frequency is None or float(rest_frequency) <= 0:
+        raise AdapterError("ALMA cube requires a positive RESTFRQ or RESTFREQ")
+    return {
+        "adapter": "alma",
+        "instrument": "ALMA",
+        "spectral_axis_type": "frequency",
+        "frequency_unit_raw": "Hz",
+        "flux_unit_raw": header["BUNIT"],
+        "rest_frequency_hz": float(rest_frequency),
+        "spectral_sampling_hz": float(header.get("CDELT3", header.get("CD3_3"))),
+        "spectral_frame": header.get("SPECSYS"),
+        "beam_major_deg": header.get("BMAJ"),
+        "beam_minor_deg": header.get("BMIN"),
+        "stokes": "I" if science.data.ndim == 4 else None,
+        "internal_coordinate": "vacuum_wavelength_angstrom_from_frequency",
+        "integrated_flux_unit": "Jy/beam Angstrom",
+        "instrument_lsf": None,
+    }
+
+
 def inspect_adapter_hdul(hdul: Any, source: dict[str, Any]) -> dict[str, Any]:
     adapter = source.get("adapter")
     if adapter is None:
         return {}
+    if adapter == "alma":
+        return inspect_alma_hdul(hdul, source)
     if adapter == "muse":
         return inspect_muse_hdul(hdul, source)
     if adapter == "nirspec":

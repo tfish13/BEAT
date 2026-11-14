@@ -25,6 +25,62 @@ from beat.model import gaussian_integrated
 
 @unittest.skipUnless(HAS_FITS_STACK, "Astropy and UltraNest are required")
 class FitsAndUltraNestTests(unittest.TestCase):
+    def test_alma_frequency_cube_converts_axis_and_keeps_stokes_lazy(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "alma_cube.fits"
+            cube = np.ones((1, 32, 3, 4), dtype=np.float32)
+            cube[0, :, 0, 0] = np.nan
+            primary = fits.PrimaryHDU(cube)
+            primary.header["TELESCOP"] = "ALMA"
+            primary.header["OBJECT"] = "TEST ALMA"
+            primary.header["CTYPE3"] = "FREQ"
+            primary.header["CUNIT3"] = "Hz"
+            primary.header["CRVAL3"] = 345.0e9
+            primary.header["CDELT3"] = -1.0e7
+            primary.header["CRPIX3"] = 2.0
+            primary.header["CTYPE4"] = "STOKES"
+            primary.header["BUNIT"] = "Jy/beam"
+            primary.header["RESTFRQ"] = 345.79599e9
+            primary.header["SPECSYS"] = "LSRK"
+            primary.writeto(path)
+
+            config_path = Path(directory) / "alma.yaml"
+            config_path.write_text(
+                "version: 2\n"
+                "input:\n"
+                "  adapter: alma\n"
+                "  path: alma_cube.fits\n"
+                "  redshift: 0.0023\n"
+                "  x_range: [0, 2]\n"
+                "  y_range: [0, 1]\n"
+                "fit:\n"
+                "  frequency_window_ghz: [344.69, 345.02]\n"
+                "  lines:\n"
+                "    - {name: CO32, rest_frequency_ghz: 345.79599}\n"
+                "  continuum:\n"
+                "    degree: 1\n"
+                "    windows: []\n",
+                encoding="utf-8",
+            )
+            from beat.config import load_config
+
+            config = load_config(config_path)
+            self.assertEqual(config["fit"]["frame"], "observed")
+            self.assertAlmostEqual(
+                config["fit"]["lines"][0]["wavelength"],
+                2.99792458e9 / 345.79599,
+            )
+            spectra = list(iter_cube(config["input"]))
+            self.assertEqual(len(spectra), 1)  # Empty first spaxel skipped.
+            spectrum = spectra[0]
+            self.assertEqual(spectrum.spectrum_id, "TEST ALMA_x0001_y0000")
+            self.assertEqual(spectrum.metadata["spectral_frame"], "LSRK")
+            np.testing.assert_allclose(
+                spectrum.wavelength,
+                2.99792458e18
+                / (345.0e9 + (np.arange(32) + 1 - 2) * -1.0e7),
+            )
+
     def test_miri_glob_selects_segment_containing_fit_window(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

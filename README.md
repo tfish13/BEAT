@@ -143,6 +143,12 @@ fit window. It preserves the distinct spatial grids and refuses ambiguous
 band overlaps without an explicit segment choice. See the
 [MIRI guide](docs/MIRI.md).
 
+For ALMA `FREQ` cubes in `Jy/beam`, use `input.adapter: alma` and configure
+rest-line frequencies and observed fitting windows in GHz. The adapter accepts
+3-D images and 4-D images with one Stokes plane. Its effective spectral
+response is **not** inferred from the cube header. See the
+[ALMA guide](docs/ALMA.md) for units and current limitations.
+
 ### Survey FITS table
 
 Set `input.kind: survey_table`. Each table row represents one target and the

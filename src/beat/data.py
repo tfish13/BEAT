@@ -24,6 +24,11 @@ _WAVELENGTH_FACTORS = {
     "m": 1.0e10,
 }
 
+# c in Angstrom Hz. The conversion is exact for vacuum wavelength; it does
+# not change the Jy/beam ordinate or silently assume an ALMA channel response.
+C_ANGSTROM_HZ = 2.99792458e18
+_FREQUENCY_FACTORS = {"hz": 1.0, "khz": 1.0e3, "mhz": 1.0e6, "ghz": 1.0e9}
+
 
 def wavelength_factor(unit: str) -> float:
     try:
@@ -61,6 +66,24 @@ def linear_wavelength(
     if log10:
         values = np.power(10.0, values)
     return values * wavelength_factor(unit)
+
+
+def _frequency_as_wavelength(
+    header: Any, n_pixels: int, fits_axis: int, unit: str
+) -> np.ndarray:
+    """Read a linear frequency WCS and return its vacuum-wavelength equivalent."""
+    factor = _FREQUENCY_FACTORS.get(str(unit).lower())
+    if factor is None:
+        raise ConfigError("input.frequency_unit must be Hz, kHz, MHz, or GHz")
+    crval = header.get(f"CRVAL{fits_axis}")
+    delta = header.get(f"CDELT{fits_axis}", header.get(f"CD{fits_axis}_{fits_axis}"))
+    if crval is None or delta is None:
+        raise ConfigError(f"Frequency WCS requires CRVAL{fits_axis} and CDELT{fits_axis}")
+    pixels = np.arange(n_pixels, dtype=float) + 1.0
+    frequency = (float(crval) + (pixels - float(header.get(f"CRPIX{fits_axis}", 1.0))) * float(delta)) * factor
+    if np.any(~np.isfinite(frequency)) or np.any(frequency <= 0):
+        raise ConfigError("Frequency WCS contains non-positive or non-finite values")
+    return C_ANGSTROM_HZ / frequency
 
 
 def _uncertainty(
@@ -126,6 +149,13 @@ def _wavelength_from_hdul(
     default_header_hdu: int | str,
     fits_axis: int,
 ) -> np.ndarray:
+    if config.get("adapter") == "alma":
+        return _frequency_as_wavelength(
+            hdul[config.get("frequency_header_hdu", default_header_hdu)].header,
+            n_pixels,
+            fits_axis,
+            config.get("frequency_unit", "hz"),
+        )
     unit = config.get("wavelength_unit", "angstrom")
     if config.get("adapter") in {"nirspec", "miri"} and "WCS-TABLE" in hdul:
         table = hdul["WCS-TABLE"].data
@@ -169,6 +199,8 @@ def iter_cube(config: dict[str, Any]) -> Iterator[Spectrum]:
             raise ConfigError(str(exc)) from exc
         flux_hdu = config["flux_hdu"]
         flux = np.asarray(hdul[flux_hdu].data)
+        if config.get("adapter") == "alma" and flux.ndim == 4:
+            flux = flux[0]  # Select Stokes I without copying the large cube.
         if flux.ndim != 3:
             raise ConfigError(f"Cube flux HDU must be 3-D; got shape {flux.shape}")
         spectral_axis = int(config.get("spectral_axis", 0))
@@ -179,6 +211,8 @@ def iter_cube(config: dict[str, Any]) -> Iterator[Spectrum]:
         uncertainty_cube = None
         if config.get("uncertainty_hdu") is not None:
             uncertainty_cube = np.asarray(hdul[config["uncertainty_hdu"]].data)
+            if config.get("adapter") == "alma" and uncertainty_cube.ndim == 4:
+                uncertainty_cube = uncertainty_cube[0]
             uncertainty_cube = np.moveaxis(uncertainty_cube, spectral_axis, 0)
             if uncertainty_cube.shape != flux.shape:
                 raise ConfigError("Cube flux and uncertainty HDUs have different shapes")
@@ -187,6 +221,8 @@ def iter_cube(config: dict[str, Any]) -> Iterator[Spectrum]:
         spatial_mask = None
         if config.get("mask_hdu") is not None:
             raw_mask = np.asarray(hdul[config["mask_hdu"]].data)
+            if config.get("adapter") == "alma" and raw_mask.ndim == 4:
+                raw_mask = raw_mask[0]
             if raw_mask.ndim == 3:
                 mask_cube = np.moveaxis(raw_mask, spectral_axis, 0)
                 if mask_cube.shape != flux.shape:
